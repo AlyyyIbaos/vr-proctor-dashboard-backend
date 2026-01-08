@@ -1,44 +1,79 @@
 import supabase from "../config/supabaseClient.js";
+import detectionConfig from "../config/detectionConfig.js";
 
 /**
- * CREATE a detection alert
- * Used by: VR system / Socket.IO simulation
+ * CREATE cheating log
+ * Used by: VR system (object whitelist, behavior detection)
  */
-export const createDetection = async (req, res) => {
+export const createCheatingLog = async (req, res) => {
   const {
     session_id,
-    behavior_type,
-    description,
-    confidence,
-    severity,
+    event_type,
+    severity = "low",
+    confidence_level,
+    details,
   } = req.body;
 
-  if (!session_id || !behavior_type || !confidence || !severity) {
-    return res.status(400).json({ error: "Missing required fields" });
+  // =========================
+  // VALIDATION (STRICT)
+  // =========================
+  if (!session_id || !confidence_level || !details) {
+    return res.status(400).json({
+      error: "Missing required fields",
+    });
   }
 
-  // 1️⃣ Insert alert
-  const { error: alertError } = await supabase
-    .from("alerts")
-    .insert([
-      {
-        session_id,
-        behavior_type,
-        description,
-        confidence,
-        severity,
-      },
-    ]);
-
-  if (alertError) {
-    console.error(alertError);
-    return res.status(500).json({ error: "Failed to save alert" });
+  if (confidence_level < 0 || confidence_level > 1) {
+    return res.status(400).json({
+      error: "confidence_level must be between 0 and 1",
+    });
   }
 
-  // 2️⃣ Update session risk level (simple rule)
-  let risk_level = "low";
-  if (severity === "medium") risk_level = "medium";
-  if (severity === "high") risk_level = "high";
+  const allowedEventTypes = [
+    "object injection",
+    "scene tampering",
+    "cheating behavior",
+    "--",
+  ];
+
+  if (!allowedEventTypes.includes(event_type)) {
+    return res.status(400).json({
+      error: "Invalid event_type",
+    });
+  }
+
+  const allowedSeverity = ["low", "medium", "high"];
+  if (!allowedSeverity.includes(severity)) {
+    return res.status(400).json({
+      error: "Invalid severity",
+    });
+  }
+
+  // =========================
+  // INSERT CHEATING LOG
+  // =========================
+  const { error: insertError } = await supabase
+    .from("cheating_logs")
+    .insert({
+      session_id,
+      event_type,
+      severity,
+      confidence_level,
+      details,
+    });
+
+  if (insertError) {
+    console.error(insertError);
+    return res.status(500).json({
+      error: "Failed to save cheating log",
+    });
+  }
+
+  // =========================
+  // UPDATE SESSION RISK LEVEL
+  // =========================
+  const risk_level =
+    detectionConfig.SEVERITY_RISK_MAP[severity] || "Low";
 
   const { error: sessionError } = await supabase
     .from("sessions")
@@ -47,31 +82,35 @@ export const createDetection = async (req, res) => {
 
   if (sessionError) {
     console.error(sessionError);
-    return res.status(500).json({ error: "Failed to update session risk" });
+    return res.status(500).json({
+      error: "Failed to update session risk level",
+    });
   }
 
   res.status(201).json({
-    message: "Detection alert created",
+    message: "Cheating log created",
     risk_level,
   });
 };
 
 /**
- * GET all alerts for a session
- * Used in: ExamineePage
+ * GET cheating logs by session
+ * Used by: Proctor / dashboard
  */
-export const getDetectionsBySession = async (req, res) => {
+export const getCheatingLogsBySession = async (req, res) => {
   const { sessionId } = req.params;
 
   const { data, error } = await supabase
-    .from("alerts")
+    .from("cheating_logs")
     .select("*")
     .eq("session_id", sessionId)
     .order("detected_at", { ascending: false });
 
   if (error) {
     console.error(error);
-    return res.status(500).json({ error: "Failed to fetch alerts" });
+    return res.status(500).json({
+      error: "Failed to fetch cheating logs",
+    });
   }
 
   res.json(data);

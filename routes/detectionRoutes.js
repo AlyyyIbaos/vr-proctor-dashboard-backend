@@ -1,15 +1,15 @@
 import express from "express";
 import {
-  createDetection,
-  getDetectionsBySession,
+  createCheatingLog,
+  getCheatingLogsBySession,
 } from "../controllers/detectionController.js";
 
 const router = express.Router();
 
-// Create alert
-router.post("/", createDetection);
+// VR + AI detections
+router.post("/cheating-log", createCheatingLog);
 
-// Get alerts by session
-router.get("/session/:sessionId", getDetectionsBySession);
+// Dashboard
+router.get("/session/:sessionId", getCheatingLogsBySession);
 
 export default router;

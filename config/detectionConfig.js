@@ -2,5 +2,12 @@ export default {
   HEAD_YAW_THRESHOLD_DEG: 45,
   HEAD_PITCH_THRESHOLD_DEG: 40,
   HAND_MOVEMENT_THRESHOLD: 1.5,
-  VOICE_ACTIVITY_THRESHOLD: 0.5
+  VOICE_ACTIVITY_THRESHOLD: 0.5,
+
+  // NEW: risk mapping
+  SEVERITY_RISK_MAP: {
+    low: "Low",
+    medium: "Medium",
+    high: "High",
+  },
 };
