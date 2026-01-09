@@ -37,6 +37,7 @@ console.log("✅ Socket.IO initialized");
 // ==============================
 // API ROUTES
 // ==============================
+app.set("io", io);
 app.use("/api/auth", authRoutes);
 app.use("/api/sessions", sessionRoutes);
 app.use("/api/detections", detectionRoutes);
