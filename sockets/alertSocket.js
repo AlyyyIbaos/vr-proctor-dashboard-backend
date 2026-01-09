@@ -1,34 +1,47 @@
-import { createAlert } from "../controllers/alertController.js";
-
 const alertSocket = (io) => {
   io.on("connection", (socket) => {
     console.log("🔔 Proctor connected:", socket.id);
 
     /**
-     * Receive detection event (from VR or simulator)
+     * Join a session room
      */
-    socket.on("new_detection", async (data) => {
+    socket.on("join_session", (sessionId) => {
+      socket.join(sessionId);
+      console.log(`🔗 Socket joined session ${sessionId}`);
+    });
+
+    socket.on("leave_session", (sessionId) => {
+      socket.leave(sessionId);
+      console.log(`🔌 Socket left session ${sessionId}`);
+    });
+
+    /**
+     * Emit cheating log in real-time
+     * This should be called AFTER DB insert succeeds
+     */
+    socket.on("emit_cheating_log", (log) => {
       /*
-        Expected data shape:
+        Expected log shape (SSOT):
         {
+          id,
           session_id,
-          behavior_type,
-          description,
-          confidence,
-          severity
+          event_type,
+          severity,
+          confidence_level,
+          details,
+          detected_at
         }
       */
 
-      console.log("⚠️ Detection received:", data);
-
-      const success = await createAlert(data);
-
-      if (success) {
-        io.emit("new_alert", {
-          ...data,
-          detected_at: new Date().toISOString(),
-        });
+      if (!log?.session_id) {
+        console.warn("⚠️ Invalid cheating log payload:", log);
+        return;
       }
+
+      console.log("🚨 Live cheating log:", log);
+
+      // Emit ONLY to session room
+      io.to(log.session_id).emit("new_alert", log);
     });
 
     socket.on("disconnect", () => {
@@ -36,7 +49,5 @@ const alertSocket = (io) => {
     });
   });
 };
-
-
 
 export default alertSocket;

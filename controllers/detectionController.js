@@ -3,7 +3,7 @@ import detectionConfig from "../config/detectionConfig.js";
 
 /**
  * CREATE cheating log
- * Used by: VR system (object whitelist, behavior detection)
+ * Used by: VR system (object whitelist, scene tampering)
  */
 export const createCheatingLog = async (req, res) => {
   const {
@@ -17,7 +17,7 @@ export const createCheatingLog = async (req, res) => {
   // =========================
   // VALIDATION (STRICT)
   // =========================
-  if (!session_id || !confidence_level || !details) {
+  if (!session_id || confidence_level === undefined || !details) {
     return res.status(400).json({
       error: "Missing required fields",
     });
@@ -52,7 +52,7 @@ export const createCheatingLog = async (req, res) => {
   // =========================
   // INSERT CHEATING LOG
   // =========================
-  const { error: insertError } = await supabase
+  const { data, error: insertError } = await supabase
     .from("cheating_logs")
     .insert({
       session_id,
@@ -60,7 +60,9 @@ export const createCheatingLog = async (req, res) => {
       severity,
       confidence_level,
       details,
-    });
+    })
+    .select()
+    .single();
 
   if (insertError) {
     console.error(insertError);
@@ -87,9 +89,20 @@ export const createCheatingLog = async (req, res) => {
     });
   }
 
+  // =========================
+  // SOCKET.IO — LIVE ALERT
+  // =========================
+  const io = req.app.get("io");
+  if (io) {
+    io.to(session_id).emit("new_alert", data);
+  } else {
+    console.warn("⚠️ Socket.IO instance not found on app");
+  }
+
   res.status(201).json({
     message: "Cheating log created",
     risk_level,
+    log: data,
   });
 };
 
