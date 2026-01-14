@@ -12,6 +12,7 @@ import detectionRoutes from "./routes/detectionRoutes.js";
 import examRoutes from "./routes/examRoutes.js";
 import vrTestRoutes from "./routes/vrTestRoutes.js";
 import vrScoreRoutes from "./routes/vrScoreRoutes.js";
+import testInferenceRoute from "./routes/testInference.js";
 
 // SOCKETS
 import alertSocket from "./sockets/alertSocket.js";
@@ -44,6 +45,7 @@ app.use("/api/detections", detectionRoutes);
 app.use("/api/exams", examRoutes);
 app.use("/api/vr", vrTestRoutes);
 app.use("/api/vr", vrScoreRoutes);
+app.use("/api", testInferenceRoute);
 
 // ==============================
 // SOCKET.IO ALERTS
