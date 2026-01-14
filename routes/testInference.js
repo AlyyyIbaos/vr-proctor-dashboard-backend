@@ -16,7 +16,7 @@ router.post("/test-inference", async (req, res) => {
     const response = await axios.post(
       `${process.env.INFERENCE_SERVICE_URL}/predict`,
       payload,
-      { timeout: 30000 } // important for cold start
+      { timeout: 90000 } // important for cold start
     );
 
     // 3. Log result (for you)
