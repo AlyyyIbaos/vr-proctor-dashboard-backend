@@ -1,102 +1,160 @@
 import express from "express";
-import CheatingLog from "../models/CheatingLog.js";
-import ExamLog from "../models/ExamLog.js";
-import Student from "../models/Student.js";
+import axios from "axios";
+import supabase from "../config/supabaseClient.js";
+import detectionConfig from "../config/detectionConfig.js";
 
-export default function createTelemetryRoutes(io) {
+export default function telemetryRoutes(io) {
   const router = express.Router();
 
-  router.post("/", async (req, res) => {
+  /**
+   * VR → Backend Telemetry Endpoint
+   * Receives batched VR telemetry and forwards it to inference service
+   */
+  router.post("/telemetry", async (req, res) => {
     try {
-      const { studentId, headRotation, handMovement, voiceLevel, environmentTamper } = req.body;
+      const {
+        session_id,
+        device_id,
+        scene_name,
+        telemetry, // expected: { head, hand, voice }
+      } = req.body;
 
-      // ---------------------------------------------------
-      // ⭐ ALWAYS SAVE TELEMETRY AS A LOG (STEP 9.4)
-      // ---------------------------------------------------
-      await ExamLog.create({
-        studentId,
-        eventType: "Telemetry Update",
-        details: {
-          headRotation: headRotation || null,
-          handMovement: handMovement || null,
-          voiceLevel: voiceLevel || null,
-          environmentTamper: environmentTamper || false
-        }
-      });
+      // =========================
+      // 1. VALIDATION
+      // =========================
+      if (!session_id || !device_id || !telemetry) {
+        return res.status(400).json({
+          error: "Missing required telemetry fields",
+        });
+      }
 
-      await Student.findOneAndUpdate(
-        {studentId},
-        {lastSeen: Date.now(), status: "active"},
-        {new: true}
+      if (!process.env.INFERENCE_SERVICE_URL) {
+        console.error("❌ INFERENCE_SERVICE_URL not set");
+        return res.status(500).json({
+          error: "Inference service not configured",
+        });
+      }
+
+      // =========================
+      // 2. BUILD INFERENCE PAYLOAD
+      // (aligns with testInference.js)
+      // =========================
+      const inferencePayload = {
+        session_id,
+        telemetry,
+      };
+
+      console.log(
+        "📡 Sending telemetry to inference:",
+        process.env.INFERENCE_SERVICE_URL
       );
 
-      let alerts = [];
+      // =========================
+      // 3. CALL INFERENCE SERVICE
+      // =========================
+      const inferenceResponse = await axios.post(
+        `${process.env.INFERENCE_SERVICE_URL}/predict`,
+        inferencePayload,
+        {
+          timeout: 90000, // allow Render cold start
+          headers: { "Content-Type": "application/json" },
+        }
+      );
 
-      // -----------------------------
-      // 1. HEAD MOVEMENT DETECTION
-      // -----------------------------
-      if (headRotation) {
-        const { x, y, z } = headRotation;
-        if (Math.abs(y) > 0.8 || Math.abs(x) > 0.8) {
-          alerts.push({
-            studentId,
-            alertType: "Suspicious head movement detected",
-            details: { headRotation }
+      const {
+        prediction = "--",
+        confidence = 0,
+        severity = "low",
+      } = inferenceResponse.data;
+
+      // =========================
+      // 4. HANDLE SUSPICIOUS RESULT
+      // =========================
+      let savedLog = null;
+
+      if (prediction !== "--") {
+        // ---- INSERT CHEATING LOG
+        const { data, error } = await supabase
+          .from("cheating_logs")
+          .insert({
+            session_id,
+            event_type: prediction,
+            severity,
+            confidence_level: confidence,
+            details: JSON.stringify({
+              device_id,
+              scene_name,
+              telemetry_summary: telemetry,
+            }),
+          })
+          .select()
+          .single();
+
+        if (error) {
+          console.error("❌ Supabase insert error:", error);
+          return res.status(500).json({
+            error: "Failed to save cheating log",
           });
         }
+
+        savedLog = data;
+
+        // ---- UPDATE SESSION RISK LEVEL
+        const risk_level =
+          detectionConfig.SEVERITY_RISK_MAP[severity] || "Low";
+
+        const { error: sessionError } = await supabase
+          .from("sessions")
+          .update({ risk_level })
+          .eq("id", session_id);
+
+        if (sessionError) {
+          console.error("❌ Failed to update session risk:", sessionError);
+        }
+
+        // ---- SOCKET.IO ALERT (REAL-TIME)
+        io.emit("new_alert", savedLog);
       }
 
-      // -----------------------------
-      // 2. HAND MOVEMENT DETECTION
-      // -----------------------------
-      if (handMovement && handMovement > 0.9) {
-        alerts.push({
-          studentId,
-          alertType: "Unusual hand movement detected",
-          details: { handMovement }
-        });
-      }
-
-      // -----------------------------
-      // 3. VOICE DETECTION
-      // -----------------------------
-      if (voiceLevel && voiceLevel > 0.7) {
-        alerts.push({
-          studentId,
-          alertType: "Voice detected (possible talking)",
-          details: { voiceLevel }
-        });
-      }
-
-      // -----------------------------
-      // 4. ENVIRONMENT TAMPERING
-      // -----------------------------
-      if (environmentTamper === true) {
-        alerts.push({
-          studentId,
-          alertType: "Environment tampering detected (3D object inserted)",
-          details: {}
-        });
-      }
-
-      // -----------------------------
-      // SAVE ALL ALERTS TO DATABASE
-      // -----------------------------
-      for (const alert of alerts) {
-        const saved = await CheatingLog.create(alert);
-
-        // Broadcast to dashboard users
-        io.emit("cheating-alert", saved);
-      }
-
-      res.json({
-        message: "Telemetry processed",
-        alertsDetected: alerts.length
+      // =========================
+      // 5. RESPONSE TO VR
+      // =========================
+      return res.json({
+        status: "ok",
+        alert_triggered: prediction !== "--",
+        prediction,
+        confidence,
+        severity,
       });
+    } catch (error) {
+      console.error("❌ VR Telemetry Processing Error");
 
-    } catch (err) {
-      console.error("Telemetry error:", err);
-      res.status(500).json({ error: "Server Error" });
+      // Inference responded with error
+      if (error.response) {
+        console.error("Inference status:", error.response.status);
+        console.error("Inference data:", error.response.data);
+
+        return res.status(502).json({
+          error: "Inference service error",
+          inference_status: error.response.status,
+        });
+      }
+
+      // No response (timeout / network)
+      if (error.request) {
+        console.error("No response from inference service");
+
+        return res.status(502).json({
+          error: "No response from inference service",
+        });
+      }
+
+      // Other error
+      console.error("Telemetry error message:", error.message);
+
+      return res.status(500).json({
+        error: "Telemetry processing failed",
+      });
     }
   });
 
