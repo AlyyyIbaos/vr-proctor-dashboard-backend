@@ -3,24 +3,23 @@ import axios from "axios";
 import supabase from "../config/supabaseClient.js";
 import detectionConfig from "../config/detectionConfig.js";
 
+const lastInferenceCall = new Map();
+const INFERENCE_COOLDOWN_MS = 8000; // 8 seconds
+
 export default function telemetryRoutes(io) {
   const router = express.Router();
 
-  /**
-   * VR → Backend Telemetry Endpoint
-   * Receives batched VR telemetry and forwards it to inference service
-   */
   router.post("/telemetry", async (req, res) => {
     try {
       const {
         session_id,
         device_id,
         scene_name,
-        telemetry, // expected: { head, hand, voice }
+        telemetry,
       } = req.body;
 
       // =========================
-      // 1. VALIDATION
+      // VALIDATION
       // =========================
       if (!session_id || !device_id || !telemetry) {
         return res.status(400).json({
@@ -28,38 +27,49 @@ export default function telemetryRoutes(io) {
         });
       }
 
-      if (!process.env.INFERENCE_SERVICE_URL) {
-        console.error("❌ INFERENCE_SERVICE_URL not set");
-        return res.status(500).json({
-          error: "Inference service not configured",
+      // =========================
+      // COOLDOWN (ANTI-SPAM)
+      // =========================
+      const lastTime = lastInferenceCall.get(session_id);
+      const now = Date.now();
+
+      if (lastTime && now - lastTime < INFERENCE_COOLDOWN_MS) {
+        return res.json({
+          status: "skipped (cooldown)",
         });
       }
 
-      // =========================
-      // 2. BUILD INFERENCE PAYLOAD
-      // (aligns with testInference.js)
-      // =========================
-      const inferencePayload = {
-        session_id,
-        telemetry,
-      };
-
-      console.log(
-        "📡 Sending telemetry to inference:",
-        process.env.INFERENCE_SERVICE_URL
-      );
+      lastInferenceCall.set(session_id, now);
 
       // =========================
-      // 3. CALL INFERENCE SERVICE
+      // CALL INFERENCE SERVICE
       // =========================
-      const inferenceResponse = await axios.post(
-        `${process.env.INFERENCE_SERVICE_URL}/predict`,
-        inferencePayload,
-        {
-          timeout: 90000, // allow Render cold start
-          headers: { "Content-Type": "application/json" },
+      let inferenceResponse;
+
+      try {
+        inferenceResponse = await axios.post(
+          `${process.env.INFERENCE_SERVICE_URL}/predict`,
+          {
+            session_id,
+            telemetry,
+          },
+          {
+            timeout: 90000,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      } catch (error) {
+        // -------- RATE LIMITED
+        if (error.response?.status === 429) {
+          console.warn("⚠️ Inference rate-limited, skipping cycle");
+          return res.json({
+            status: "inference_rate_limited",
+          });
         }
-      );
+
+        console.error("❌ Inference call failed:", error.message);
+        throw error;
+      }
 
       const {
         prediction = "--",
@@ -68,12 +78,9 @@ export default function telemetryRoutes(io) {
       } = inferenceResponse.data;
 
       // =========================
-      // 4. HANDLE SUSPICIOUS RESULT
+      // LOG + ALERT (ONLY IF SUSPICIOUS)
       // =========================
-      let savedLog = null;
-
       if (prediction !== "--") {
-        // ---- INSERT CHEATING LOG
         const { data, error } = await supabase
           .from("cheating_logs")
           .insert({
@@ -97,60 +104,25 @@ export default function telemetryRoutes(io) {
           });
         }
 
-        savedLog = data;
-
-        // ---- UPDATE SESSION RISK LEVEL
         const risk_level =
           detectionConfig.SEVERITY_RISK_MAP[severity] || "Low";
 
-        const { error: sessionError } = await supabase
+        await supabase
           .from("sessions")
           .update({ risk_level })
           .eq("id", session_id);
 
-        if (sessionError) {
-          console.error("❌ Failed to update session risk:", sessionError);
-        }
-
-        // ---- SOCKET.IO ALERT (REAL-TIME)
-        io.emit("new_alert", savedLog);
+        io.emit("new_alert", data);
       }
 
-      // =========================
-      // 5. RESPONSE TO VR
-      // =========================
       return res.json({
         status: "ok",
-        alert_triggered: prediction !== "--",
         prediction,
         confidence,
         severity,
       });
     } catch (error) {
-      console.error("❌ VR Telemetry Processing Error");
-
-      // Inference responded with error
-      if (error.response) {
-        console.error("Inference status:", error.response.status);
-        console.error("Inference data:", error.response.data);
-
-        return res.status(502).json({
-          error: "Inference service error",
-          inference_status: error.response.status,
-        });
-      }
-
-      // No response (timeout / network)
-      if (error.request) {
-        console.error("No response from inference service");
-
-        return res.status(502).json({
-          error: "No response from inference service",
-        });
-      }
-
-      // Other error
-      console.error("Telemetry error message:", error.message);
+      console.error("❌ VR Telemetry Processing Error:", error.message);
 
       return res.status(500).json({
         error: "Telemetry processing failed",
