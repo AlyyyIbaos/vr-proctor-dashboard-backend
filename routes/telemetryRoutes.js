@@ -6,7 +6,7 @@ import detectionConfig from "../config/detectionConfig.js";
 // =========================
 // INFERENCE COOLDOWN CONFIG
 // =========================
-const lastInferenceCall = new Map();
+const lastInferenceRun = new Map();
 const INFERENCE_COOLDOWN_MS = 10000; // 10 seconds
 
 export default function telemetryRoutes(io) {
@@ -21,41 +21,32 @@ export default function telemetryRoutes(io) {
         telemetry,
       } = req.body;
 
-      // =========================
-      // VALIDATION
-      // =========================
       if (!session_id || !device_id || !telemetry) {
         return res.status(400).json({
           error: "Missing required telemetry fields",
         });
       }
 
-      // =========================
-      // COOLDOWN CHECK
-      // =========================
-      const lastTime = lastInferenceCall.get(session_id);
       const now = Date.now();
+      const lastRun = lastInferenceRun.get(session_id);
 
-      if (lastTime && now - lastTime < INFERENCE_COOLDOWN_MS) {
+      // =========================
+      // COOLDOWN CHECK (READ ONLY)
+      // =========================
+      if (lastRun && now - lastRun < INFERENCE_COOLDOWN_MS) {
         return res.json({
           status: "skipped (cooldown active)",
         });
       }
 
-      lastInferenceCall.set(session_id, now);
-
       // =========================
       // CALL INFERENCE SERVICE
       // =========================
       let inferenceResponse;
-
       try {
         inferenceResponse = await axios.post(
           `${process.env.INFERENCE_SERVICE_URL}/predict`,
-          {
-            session_id,
-            telemetry,
-          },
+          { session_id, telemetry },
           {
             timeout: 90000,
             headers: { "Content-Type": "application/json" },
@@ -63,15 +54,16 @@ export default function telemetryRoutes(io) {
         );
       } catch (error) {
         if (error.response?.status === 429) {
-          console.warn("⚠️ Inference rate-limited, skipping cycle");
+          console.warn("⚠️ Inference rate-limited (429), will retry later");
           return res.json({
             status: "inference_rate_limited",
           });
         }
-
-        console.error("❌ Inference call failed:", error.message);
         throw error;
       }
+
+      // ✅ UPDATE COOLDOWN ONLY AFTER INFERENCE RUNS
+      lastInferenceRun.set(session_id, now);
 
       const {
         prediction = "--",
@@ -79,9 +71,6 @@ export default function telemetryRoutes(io) {
         severity = "low",
       } = inferenceResponse.data;
 
-      // =========================
-      // LOG + ALERT
-      // =========================
       if (prediction !== "--") {
         const { data, error } = await supabase
           .from("cheating_logs")
