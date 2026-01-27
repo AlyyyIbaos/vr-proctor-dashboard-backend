@@ -4,10 +4,11 @@ import supabase from "../config/supabaseClient.js";
 import detectionConfig from "../config/detectionConfig.js";
 
 // =========================
-// INFERENCE COOLDOWN CONFIG
+// INFERENCE CONTROL
 // =========================
 const lastInferenceRun = new Map();
-const INFERENCE_COOLDOWN_MS = 10000; // 10 seconds
+const INFERENCE_MIN_INTERVAL_MS = 60000; // 🔥 60 seconds
+const BACKOFF_MS = 120000; // 2 minutes on 429
 
 export default function telemetryRoutes(io) {
   const router = express.Router();
@@ -31,11 +32,11 @@ export default function telemetryRoutes(io) {
       const lastRun = lastInferenceRun.get(session_id);
 
       // =========================
-      // COOLDOWN CHECK (READ ONLY)
+      // HARD INTERVAL GATE
       // =========================
-      if (lastRun && now - lastRun < INFERENCE_COOLDOWN_MS) {
+      if (lastRun && now - lastRun < INFERENCE_MIN_INTERVAL_MS) {
         return res.json({
-          status: "skipped (cooldown active)",
+          status: "skipped (waiting for inference window)",
         });
       }
 
@@ -53,16 +54,22 @@ export default function telemetryRoutes(io) {
           }
         );
       } catch (error) {
+        // 🔴 Cloudflare / rate limit
         if (error.response?.status === 429) {
-          console.warn("⚠️ Inference rate-limited (429), will retry later");
+          console.warn("⚠️ Inference blocked by Cloudflare — backing off");
+
+          // 🔒 BACKOFF LOCK
+          lastInferenceRun.set(session_id, now + BACKOFF_MS);
+
           return res.json({
-            status: "inference_rate_limited",
+            status: "inference_backoff_active",
           });
         }
+
         throw error;
       }
 
-      // ✅ UPDATE COOLDOWN ONLY AFTER INFERENCE RUNS
+      // ✅ Update last successful inference time
       lastInferenceRun.set(session_id, now);
 
       const {
