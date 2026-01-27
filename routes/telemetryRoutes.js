@@ -3,8 +3,11 @@ import axios from "axios";
 import supabase from "../config/supabaseClient.js";
 import detectionConfig from "../config/detectionConfig.js";
 
+// =========================
+// INFERENCE COOLDOWN CONFIG
+// =========================
 const lastInferenceCall = new Map();
-const INFERENCE_COOLDOWN_MS = 8000; // 8 seconds
+const INFERENCE_COOLDOWN_MS = 10000; // 10 seconds
 
 export default function telemetryRoutes(io) {
   const router = express.Router();
@@ -28,14 +31,14 @@ export default function telemetryRoutes(io) {
       }
 
       // =========================
-      // COOLDOWN (ANTI-SPAM)
+      // COOLDOWN CHECK
       // =========================
       const lastTime = lastInferenceCall.get(session_id);
       const now = Date.now();
 
       if (lastTime && now - lastTime < INFERENCE_COOLDOWN_MS) {
         return res.json({
-          status: "skipped (cooldown)",
+          status: "skipped (cooldown active)",
         });
       }
 
@@ -59,7 +62,6 @@ export default function telemetryRoutes(io) {
           }
         );
       } catch (error) {
-        // -------- RATE LIMITED
         if (error.response?.status === 429) {
           console.warn("⚠️ Inference rate-limited, skipping cycle");
           return res.json({
@@ -78,7 +80,7 @@ export default function telemetryRoutes(io) {
       } = inferenceResponse.data;
 
       // =========================
-      // LOG + ALERT (ONLY IF SUSPICIOUS)
+      // LOG + ALERT
       // =========================
       if (prediction !== "--") {
         const { data, error } = await supabase
@@ -123,7 +125,6 @@ export default function telemetryRoutes(io) {
       });
     } catch (error) {
       console.error("❌ VR Telemetry Processing Error:", error.message);
-
       return res.status(500).json({
         error: "Telemetry processing failed",
       });
