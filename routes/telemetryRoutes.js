@@ -1,26 +1,20 @@
 import express from "express";
 import axios from "axios";
-import supabase from "../config/supabaseClient.js";
 import detectionConfig from "../config/detectionConfig.js";
+import { createCheatingLog } from "../controllers/detectionController.js";
 
 // =========================
-// INFERENCE CONTROL
+// IN-MEMORY INFERENCE CLOCK
+// (session_id → timestamp)
 // =========================
-const lastInferenceRun = new Map();
-const INFERENCE_MIN_INTERVAL_MS = 60000; // 🔥 60 seconds
-const BACKOFF_MS = 120000; // 2 minutes on 429
+const lastInferenceAt = new Map();
 
 export default function telemetryRoutes(io) {
   const router = express.Router();
 
   router.post("/telemetry", async (req, res) => {
     try {
-      const {
-        session_id,
-        device_id,
-        scene_name,
-        telemetry,
-      } = req.body;
+      const { session_id, device_id, scene_name, telemetry } = req.body;
 
       if (!session_id || !device_id || !telemetry) {
         return res.status(400).json({
@@ -29,88 +23,75 @@ export default function telemetryRoutes(io) {
       }
 
       const now = Date.now();
-      const lastRun = lastInferenceRun.get(session_id);
+      const lastRun = lastInferenceAt.get(session_id);
 
       // =========================
-      // HARD INTERVAL GATE
+      // INTERVAL GATE (N seconds)
       // =========================
-      if (lastRun && now - lastRun < INFERENCE_MIN_INTERVAL_MS) {
+      if (lastRun && now - lastRun < detectionConfig.INFERENCE_INTERVAL_MS) {
         return res.json({
-          status: "skipped (waiting for inference window)",
+          status: "telemetry_received_inference_skipped",
         });
       }
 
       // =========================
-      // CALL INFERENCE SERVICE
+      // CALL CNN-LSTM INFERENCE
       // =========================
-      let inferenceResponse;
+      let inference;
       try {
-        inferenceResponse = await axios.post(
+        inference = await axios.post(
           `${process.env.INFERENCE_SERVICE_URL}/predict`,
           { session_id, telemetry },
           {
-            timeout: 90000,
+            timeout: 90_000,
             headers: { "Content-Type": "application/json" },
-          }
+          },
         );
-      } catch (error) {
-        // 🔴 Cloudflare / rate limit
-        if (error.response?.status === 429) {
-          console.warn("⚠️ Inference blocked by Cloudflare — backing off");
-
-          // 🔒 BACKOFF LOCK
-          lastInferenceRun.set(session_id, now + BACKOFF_MS);
-
-          return res.json({
-            status: "inference_backoff_active",
-          });
+      } catch (err) {
+        if (err.response?.status === 429) {
+          console.warn("⚠️ Inference rate-limited — backing off");
+          lastInferenceAt.set(
+            session_id,
+            now + detectionConfig.INFERENCE_BACKOFF_MS,
+          );
+          return res.json({ status: "inference_backoff_active" });
         }
-
-        throw error;
+        throw err;
       }
 
-      // ✅ Update last successful inference time
-      lastInferenceRun.set(session_id, now);
+      lastInferenceAt.set(session_id, now);
 
       const {
         prediction = "--",
         confidence = 0,
         severity = "low",
-      } = inferenceResponse.data;
+      } = inference.data;
 
+      // =========================
+      // IF MODEL FLAGS SUSPICIOUS
+      // =========================
       if (prediction !== "--") {
-        const { data, error } = await supabase
-          .from("cheating_logs")
-          .insert({
-            session_id,
-            event_type: prediction,
-            severity,
-            confidence_level: confidence,
-            details: JSON.stringify({
-              device_id,
-              scene_name,
-              telemetry_summary: telemetry,
-            }),
-          })
-          .select()
-          .single();
-
-        if (error) {
-          console.error("❌ Supabase insert error:", error);
-          return res.status(500).json({
-            error: "Failed to save cheating log",
-          });
-        }
-
-        const risk_level =
-          detectionConfig.SEVERITY_RISK_MAP[severity] || "Low";
-
-        await supabase
-          .from("sessions")
-          .update({ risk_level })
-          .eq("id", session_id);
-
-        io.emit("new_alert", data);
+        // reuse controller logic
+        await createCheatingLog(
+          {
+            body: {
+              session_id,
+              event_type: prediction,
+              severity,
+              confidence_level: confidence,
+              details: {
+                device_id,
+                scene_name,
+                telemetry_summary: telemetry,
+              },
+            },
+            app: { get: () => io },
+          },
+          {
+            status: () => ({ json: () => {} }),
+            json: () => {},
+          },
+        );
       }
 
       return res.json({
@@ -119,8 +100,8 @@ export default function telemetryRoutes(io) {
         confidence,
         severity,
       });
-    } catch (error) {
-      console.error("❌ VR Telemetry Processing Error:", error.message);
+    } catch (err) {
+      console.error("❌ Telemetry processing error:", err.message);
       return res.status(500).json({
         error: "Telemetry processing failed",
       });

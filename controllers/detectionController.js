@@ -74,8 +74,7 @@ export const createCheatingLog = async (req, res) => {
   // =========================
   // UPDATE SESSION RISK LEVEL
   // =========================
-  const risk_level =
-    detectionConfig.SEVERITY_RISK_MAP[severity] || "Low";
+  const risk_level = detectionConfig.SEVERITY_RISK_MAP[severity] || "Low";
 
   const { error: sessionError } = await supabase
     .from("sessions")
