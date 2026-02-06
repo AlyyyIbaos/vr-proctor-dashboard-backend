@@ -6,41 +6,40 @@ import supabase from "../config/supabaseClient.js";
 // INFERENCE CONTROL
 // =========================
 const lastInferenceRun = new Map();
-
-// How often inference is allowed per session
-const INFERENCE_MIN_INTERVAL_MS = 15000; // 🔥 15 seconds
-
-// Backoff if inference service rate-limits us
-const BACKOFF_MS = 60000; // 1 minute
-
-// 🔥 LOWERED DEMO THRESHOLD (CNN-LSTM sensitivity)
+const INFERENCE_MIN_INTERVAL_MS = 15000;
+const BACKOFF_MS = 60000;
 const DEMO_THRESHOLD = 0.3;
 
 export default function telemetryRoutes(io) {
   const router = express.Router();
 
-  /**
-   * VR → Backend Telemetry (SEQUENCE MODE)
-   * Receives 60-frame sequences from Unity
-   */
   router.post("/telemetry", async (req, res) => {
-    try {
-      const {
-        session_id,
-        device_id,
-        scene_name,
-        telemetry, // 👈 List<float[]> from Unity
-      } = req.body;
+    // =========================
+    // 🔍 TELEMETRY DEBUG BLOCK
+    // =========================
+    console.error("=== TELEMETRY DEBUG ===");
+    console.error("headers:", req.headers);
+    console.error("body type:", typeof req.body);
+    console.error("raw body:", req.body);
+    console.error("session_id:", req.body?.session_id);
+    console.error("telemetry isArray:", Array.isArray(req.body?.telemetry));
+    console.error("telemetry length:", req.body?.telemetry?.length);
+    console.error("first frame:", req.body?.telemetry?.[0]);
+    console.error(
+      "first frame length:",
+      Array.isArray(req.body?.telemetry?.[0])
+        ? req.body.telemetry[0].length
+        : "N/A",
+    );
+    console.error("=== END TELEMETRY DEBUG ===");
 
-      // =========================
-      // VALIDATION
-      // =========================
-      if (
-        !session_id ||
-        !device_id ||
-        !Array.isArray(telemetry) ||
-        telemetry.length === 0
-      ) {
+    // =========================
+    // VALIDATION
+    // =========================
+    try {
+      const { session_id, telemetry } = req.body;
+
+      if (!session_id || !telemetry || !Array.isArray(telemetry)) {
         return res.status(400).json({
           error: "Invalid telemetry payload",
         });
@@ -50,55 +49,42 @@ export default function telemetryRoutes(io) {
       const lastRun = lastInferenceRun.get(session_id);
 
       // =========================
-      // PER-SESSION RATE LIMIT
+      // RATE LIMIT
       // =========================
       if (lastRun && now - lastRun < INFERENCE_MIN_INTERVAL_MS) {
-        return res.json({
-          status: "skipped (cooldown)",
-        });
+        return res.json({ status: "cooldown" });
       }
 
       // =========================
-      // CALL CNN-LSTM INFERENCE
+      // CALL INFERENCE SERVICE
       // =========================
       let inferenceResponse;
       try {
         inferenceResponse = await axios.post(
           `${process.env.INFERENCE_SERVICE_URL}/predict`,
+          { telemetry },
           {
-            telemetry, // 👈 FULL SEQUENCE
-          },
-          {
-            timeout: 90000,
+            timeout: 60000,
             headers: { "Content-Type": "application/json" },
           },
         );
       } catch (err) {
         if (err.response?.status === 429) {
-          console.warn("⚠️ Inference rate-limited — backing off");
           lastInferenceRun.set(session_id, now + BACKOFF_MS);
-
-          return res.json({
-            status: "inference_backoff_active",
-          });
+          return res.json({ status: "rate_limited" });
         }
         throw err;
       }
 
-      // Update last inference timestamp
       lastInferenceRun.set(session_id, now);
 
       // =========================
       // READ CNN-LSTM OUTPUT
       // =========================
-      const { cheating_score = 0, label = "normal" } = inferenceResponse.data;
+      const cheating_score = inferenceResponse.data?.cheating_score ?? 0;
+      const label = inferenceResponse.data?.label ?? "normal";
 
-      // =========================
-      // DECISION LOGIC
-      // =========================
       const isSuspicious = cheating_score >= DEMO_THRESHOLD;
-
-      const prediction = isSuspicious ? "cheating behavior" : "normal";
 
       const severity = isSuspicious
         ? cheating_score >= 0.7
@@ -107,6 +93,14 @@ export default function telemetryRoutes(io) {
             ? "medium"
             : "low"
         : "low";
+
+      const prediction = isSuspicious ? "cheating behavior" : "normal";
+
+      console.error("🧠 CNN-LSTM RESULT:", {
+        cheating_score,
+        label,
+        prediction,
+      });
 
       // =========================
       // 🔔 ALWAYS EMIT LIVE STATUS
@@ -121,10 +115,10 @@ export default function telemetryRoutes(io) {
       });
 
       // =========================
-      // SAVE ONLY IF SUSPICIOUS
+      // SAVE IF SUSPICIOUS
       // =========================
       if (isSuspicious) {
-        const { data, error } = await supabase
+        const { data } = await supabase
           .from("cheating_logs")
           .insert({
             session_id,
@@ -132,8 +126,6 @@ export default function telemetryRoutes(io) {
             severity,
             confidence_level: cheating_score,
             details: JSON.stringify({
-              device_id,
-              scene_name,
               model: "cnn-lstm",
               sequence_length: telemetry.length,
             }),
@@ -141,37 +133,31 @@ export default function telemetryRoutes(io) {
           .select()
           .single();
 
-        if (!error && data) {
-          // Update session risk level
-          const risk_level =
-            severity === "high"
-              ? "High"
-              : severity === "medium"
-                ? "Medium"
-                : "Low";
-
+        if (data) {
           await supabase
             .from("sessions")
-            .update({ risk_level })
+            .update({
+              risk_level:
+                severity === "high"
+                  ? "High"
+                  : severity === "medium"
+                    ? "Medium"
+                    : "Low",
+            })
             .eq("id", session_id);
 
-          // 🚨 Emit cheating alert
           io.emit("new_alert", data);
         }
       }
 
-      // =========================
-      // RESPONSE
-      // =========================
       return res.json({
         status: "ok",
         prediction,
         confidence: cheating_score,
         severity,
-        model: "cnn-lstm",
       });
     } catch (error) {
-      console.error("❌ VR Telemetry Processing Error:", error);
+      console.error("❌ TELEMETRY ROUTE ERROR:", error);
       return res.status(500).json({
         error: "Telemetry processing failed",
       });
