@@ -7,28 +7,42 @@ import supabase from "../config/supabaseClient.js";
 // =========================
 const lastInferenceRun = new Map();
 
-// How often we allow inference per session
-const INFERENCE_MIN_INTERVAL_MS = 15000; // 🔥 15 seconds (more sensitive)
+// How often inference is allowed per session
+const INFERENCE_MIN_INTERVAL_MS = 15000; // 🔥 15 seconds
 
 // Backoff if inference service rate-limits us
 const BACKOFF_MS = 60000; // 1 minute
 
-// DEMO / SENSITIVE THRESHOLD
-const DEMO_THRESHOLD = 0.3; // 🔥 LOWERED from 0.50
+// 🔥 LOWERED DEMO THRESHOLD (CNN-LSTM sensitivity)
+const DEMO_THRESHOLD = 0.3;
 
 export default function telemetryRoutes(io) {
   const router = express.Router();
 
   /**
-   * VR → Backend Telemetry Endpoint
+   * VR → Backend Telemetry (SEQUENCE MODE)
+   * Receives 60-frame sequences from Unity
    */
   router.post("/telemetry", async (req, res) => {
     try {
-      const { session_id, device_id, scene_name, telemetry } = req.body;
+      const {
+        session_id,
+        device_id,
+        scene_name,
+        telemetry, // 👈 List<float[]> from Unity
+      } = req.body;
 
-      if (!session_id || !device_id || !telemetry) {
+      // =========================
+      // VALIDATION
+      // =========================
+      if (
+        !session_id ||
+        !device_id ||
+        !Array.isArray(telemetry) ||
+        telemetry.length === 0
+      ) {
         return res.status(400).json({
-          error: "Missing required telemetry fields",
+          error: "Invalid telemetry payload",
         });
       }
 
@@ -36,7 +50,7 @@ export default function telemetryRoutes(io) {
       const lastRun = lastInferenceRun.get(session_id);
 
       // =========================
-      // RATE LIMIT (PER SESSION)
+      // PER-SESSION RATE LIMIT
       // =========================
       if (lastRun && now - lastRun < INFERENCE_MIN_INTERVAL_MS) {
         return res.json({
@@ -45,21 +59,21 @@ export default function telemetryRoutes(io) {
       }
 
       // =========================
-      // CALL INFERENCE SERVICE
+      // CALL CNN-LSTM INFERENCE
       // =========================
       let inferenceResponse;
-
       try {
         inferenceResponse = await axios.post(
           `${process.env.INFERENCE_SERVICE_URL}/predict`,
-          { telemetry },
+          {
+            telemetry, // 👈 FULL SEQUENCE
+          },
           {
             timeout: 90000,
             headers: { "Content-Type": "application/json" },
           },
         );
       } catch (err) {
-        // Cloudflare / rate limit protection
         if (err.response?.status === 429) {
           console.warn("⚠️ Inference rate-limited — backing off");
           lastInferenceRun.set(session_id, now + BACKOFF_MS);
@@ -68,7 +82,6 @@ export default function telemetryRoutes(io) {
             status: "inference_backoff_active",
           });
         }
-
         throw err;
       }
 
@@ -81,7 +94,7 @@ export default function telemetryRoutes(io) {
       const { cheating_score = 0, label = "normal" } = inferenceResponse.data;
 
       // =========================
-      // INTERPRET RESULT (LOWERED SENSITIVITY)
+      // DECISION LOGIC
       // =========================
       const isSuspicious = cheating_score >= DEMO_THRESHOLD;
 
@@ -103,11 +116,12 @@ export default function telemetryRoutes(io) {
         prediction,
         confidence: cheating_score,
         severity,
+        model: "cnn-lstm",
         timestamp: new Date().toISOString(),
       });
 
       // =========================
-      // SAVE TO DB ONLY IF SUSPICIOUS
+      // SAVE ONLY IF SUSPICIOUS
       // =========================
       if (isSuspicious) {
         const { data, error } = await supabase
@@ -120,7 +134,8 @@ export default function telemetryRoutes(io) {
             details: JSON.stringify({
               device_id,
               scene_name,
-              telemetry_summary: telemetry,
+              model: "cnn-lstm",
+              sequence_length: telemetry.length,
             }),
           })
           .select()
@@ -145,14 +160,18 @@ export default function telemetryRoutes(io) {
         }
       }
 
+      // =========================
+      // RESPONSE
+      // =========================
       return res.json({
         status: "ok",
         prediction,
         confidence: cheating_score,
         severity,
+        model: "cnn-lstm",
       });
     } catch (error) {
-      console.error("❌ VR Telemetry Processing Error:", error.message);
+      console.error("❌ VR Telemetry Processing Error:", error);
       return res.status(500).json({
         error: "Telemetry processing failed",
       });
