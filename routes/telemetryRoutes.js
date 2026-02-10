@@ -3,129 +3,226 @@ import axios from "axios";
 import supabase from "../config/supabaseClient.js";
 
 // =========================
-// INFERENCE CONTROL
+// SESSION STATE (IN-MEMORY)
 // =========================
-const lastInferenceRun = new Map(); // session_id → timestamp
-const sessionStartTime = new Map(); // session_id → first seen time
+const lastInferenceRun = new Map();
+const sessionStartTime = new Map();
 
-const WARMUP_MS = 5000; // 🔥 first 5 seconds = skip inference
+const scoreHistory = new Map();
+const baselineBuffer = new Map();
+const baselineStats = new Map();
+
+const suspiciousSince = new Map();
+const cheatingSince = new Map();
+
+// STEP 3 STATE
+const lastEmittedLabel = new Map(); // prevents duplicate logs
+const sessionFinalized = new Map(); // ensures final decision once
+
+// =========================
+// CONSTANTS
+// =========================
+const SCORE_WINDOW_SIZE = 5;
+const BASELINE_SAMPLES = 5;
+
+const Z_SUSPICIOUS = 1.5;
+const Z_CHEATING = 2.5;
+const CHEATING_COUNT_REQUIRED = 3;
+
+const SUSPICIOUS_PERSIST_MS = 15000;
+const CHEATING_PERSIST_MS = 30000;
+
+const WARMUP_MS = 5000;
 const INFERENCE_MIN_INTERVAL_MS = 15000;
-const BACKOFF_MS = 60000;
 
 export default function telemetryRoutes(io) {
   const router = express.Router();
 
   router.post("/telemetry", async (req, res) => {
-    console.error("===== TELEMETRY ENTRY =====");
-
     try {
-      const { session_id, device_id, scene_name, telemetry } = req.body;
-
-      // ---------- BASIC DEBUG ----------
-      console.error("session_id:", session_id);
-      console.error("telemetry exists:", !!telemetry);
-      console.error("telemetry is array:", Array.isArray(telemetry));
-      console.error("telemetry length:", telemetry?.length);
-      console.error("first frame length:", telemetry?.[0]?.length);
+      const { session_id, telemetry } = req.body;
+      const now = Date.now();
 
       // ---------- VALIDATION ----------
       if (
         !session_id ||
         !telemetry ||
-        !Array.isArray(telemetry) ||
         telemetry.length !== 60 ||
-        !Array.isArray(telemetry[0]) ||
         telemetry[0].length !== 12
       ) {
-        console.error("❌ INVALID TELEMETRY STRUCTURE");
         return res.status(400).json({ error: "Invalid telemetry payload" });
       }
 
-      const now = Date.now();
-
-      // ---------- SESSION START (WARM-UP) ----------
+      // ---------- SESSION INIT ----------
       if (!sessionStartTime.has(session_id)) {
         sessionStartTime.set(session_id, now);
-        console.warn("🟡 New session detected — starting warm-up");
+        scoreHistory.set(session_id, []);
+        baselineBuffer.set(session_id, []);
+        suspiciousSince.set(session_id, null);
+        cheatingSince.set(session_id, null);
+        lastEmittedLabel.set(session_id, null);
+        sessionFinalized.set(session_id, false);
       }
 
-      const elapsed = now - sessionStartTime.get(session_id);
-
-      if (elapsed < WARMUP_MS) {
-        console.warn(
-          `⏳ Warm-up active (${Math.floor(elapsed)}ms) — inference skipped`,
-        );
-
-        io.emit("live_status", {
-          session_id,
-          prediction: "warming_up",
-          confidence: 0,
-          timestamp: new Date().toISOString(),
-        });
-
-        return res.json({
-          status: "skipped",
-          reason: "warmup",
-        });
+      // ---------- WARM-UP ----------
+      if (now - sessionStartTime.get(session_id) < WARMUP_MS) {
+        return res.json({ status: "warming_up" });
       }
 
       // ---------- COOLDOWN ----------
       const lastRun = lastInferenceRun.get(session_id);
       if (lastRun && now - lastRun < INFERENCE_MIN_INTERVAL_MS) {
-        console.warn("⏳ Inference skipped (cooldown)");
-
-        return res.json({
-          status: "skipped",
-          reason: "cooldown",
-        });
+        return res.json({ status: "cooldown" });
       }
 
-      // ---------- CALL INFERENCE SERVICE ----------
-      console.error("➡️ CALLING INFERENCE SERVICE");
-
-      let inferenceResponse;
-      try {
-        inferenceResponse = await axios.post(
-          `${process.env.INFERENCE_SERVICE_URL}/predict`,
-          {
-            session_id,
-            sequence: telemetry,
-          },
-          { timeout: 120000 },
-        );
-      } catch (aiErr) {
-        console.error("🔥 INFERENCE SERVICE ERROR");
-        console.error(aiErr.response?.data || aiErr.message);
-        throw aiErr;
-      }
+      // ---------- INFERENCE ----------
+      const inferenceResponse = await axios.post(
+        `${process.env.INFERENCE_SERVICE_URL}/predict`,
+        { session_id, sequence: telemetry },
+        { timeout: 120000 },
+      );
 
       lastInferenceRun.set(session_id, now);
+      const { cheating_score = 0 } = inferenceResponse.data || {};
 
-      console.error("✅ INFERENCE RESPONSE:", inferenceResponse.data);
+      // =========================
+      // BASELINE CALIBRATION
+      // =========================
+      if (!baselineStats.has(session_id)) {
+        const buf = baselineBuffer.get(session_id);
+        buf.push(cheating_score);
 
-      const { cheating_score = 0, label = "normal" } =
-        inferenceResponse.data || {};
+        if (buf.length < BASELINE_SAMPLES) {
+          return res.json({
+            status: "calibrating",
+            collected: buf.length,
+          });
+        }
 
-      // ---------- EMIT LIVE STATUS ----------
+        const mean = buf.reduce((a, b) => a + b, 0) / buf.length;
+        const variance =
+          buf.reduce((s, x) => s + (x - mean) ** 2, 0) / buf.length;
+        const std = Math.sqrt(variance) || 0.001;
+
+        baselineStats.set(session_id, { mean, std });
+
+        return res.json({ status: "baseline_ready" });
+      }
+
+      // =========================
+      // Z-SCORE + TEMPORAL WINDOW
+      // =========================
+      const { mean, std } = baselineStats.get(session_id);
+      const z = (cheating_score - mean) / std;
+
+      const history = scoreHistory.get(session_id);
+      history.push(z);
+      if (history.length > SCORE_WINDOW_SIZE) history.shift();
+
+      const highCount = history.filter((v) => v >= Z_CHEATING).length;
+
+      // =========================
+      // DECISION LOGIC
+      // =========================
+      let label = "normal";
+      let reason = "normal_behavior";
+
+      if (z >= Z_SUSPICIOUS) {
+        if (!suspiciousSince.get(session_id)) {
+          suspiciousSince.set(session_id, now);
+        }
+
+        const duration = now - suspiciousSince.get(session_id);
+
+        if (z >= Z_CHEATING && highCount >= CHEATING_COUNT_REQUIRED) {
+          if (!cheatingSince.get(session_id)) {
+            cheatingSince.set(session_id, now);
+          }
+
+          if (now - cheatingSince.get(session_id) >= CHEATING_PERSIST_MS) {
+            label = "cheating";
+            reason = "consistent_high_deviation";
+          } else {
+            label = "suspicious";
+            reason = "sustained_abnormal_behavior";
+          }
+        } else if (duration >= SUSPICIOUS_PERSIST_MS) {
+          label = "suspicious";
+          reason = "sustained_abnormal_behavior";
+        } else {
+          label = "suspicious";
+          reason = "sporadic_anomaly";
+        }
+      } else {
+        suspiciousSince.set(session_id, null);
+        cheatingSince.set(session_id, null);
+      }
+
+      // =========================
+      // STEP 3 — DATABASE WRITES
+      // =========================
+
+      // 1️⃣ LOG EVENT ONLY IF LABEL CHANGED
+      const previousLabel = lastEmittedLabel.get(session_id);
+
+      if (previousLabel !== label) {
+        try {
+          await supabase.from("proctor_events").insert([
+            {
+              session_id,
+              event_type: label,
+              reason_code: reason,
+              confidence_score: cheating_score,
+              z_score: z,
+            },
+          ]);
+
+          lastEmittedLabel.set(session_id, label);
+        } catch (dbErr) {
+          console.error("⚠️ Failed to log proctor event:", dbErr.message);
+        }
+      }
+
+      // 2️⃣ FINALIZE SESSION ON CHEATING
+      if (label === "cheating" && !sessionFinalized.get(session_id)) {
+        try {
+          await supabase
+            .from("sessions")
+            .update({
+              final_label: "cheating",
+              final_reason: reason,
+              final_confidence: cheating_score,
+              decision_at: new Date().toISOString(),
+              status: "flagged",
+            })
+            .eq("id", session_id);
+
+          sessionFinalized.set(session_id, true);
+        } catch (dbErr) {
+          console.error("⚠️ Failed to finalize session:", dbErr.message);
+        }
+      }
+
+      // ---------- EMIT ----------
       io.emit("live_status", {
         session_id,
         prediction: label,
         confidence: cheating_score,
+        reason,
+        z_score: z,
         timestamp: new Date().toISOString(),
       });
 
       return res.json({
         status: "ok",
-        cheating_score,
         label,
+        reason,
+        cheating_score,
+        z_score: z,
       });
     } catch (err) {
-      console.error("💥 TELEMETRY CRASH STACK TRACE");
-      console.error(err.stack || err);
-
-      return res.status(500).json({
-        error: "Telemetry processing failed",
-      });
+      console.error("💥 TELEMETRY ERROR:", err);
+      return res.status(500).json({ error: "Telemetry processing failed" });
     }
   });
 
