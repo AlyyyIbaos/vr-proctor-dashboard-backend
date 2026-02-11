@@ -127,3 +127,83 @@ export const getCheatingLogsBySession = async (req, res) => {
 
   res.json(data);
 };
+
+/**
+ * FINALIZE SESSION
+ * Computes final verdict based on proctor_events
+ * Called when VR exam session ends
+ */
+export const finalizeSession = async (req, res) => {
+  const { session_id } = req.body;
+
+  if (!session_id) {
+    return res.status(400).json({
+      error: "session_id is required",
+    });
+  }
+
+  try {
+    // 1️⃣ Fetch monitoring events
+    const { data: events, error } = await supabase
+      .from("proctor_events")
+      .select("*")
+      .eq("session_id", session_id);
+
+    if (error) {
+      console.error(error);
+      return res.status(500).json({
+        error: "Failed to fetch proctor events",
+      });
+    }
+
+    let finalLabel = "normal";
+    let finalReason = "no_anomalies_detected";
+    let finalConfidence = 0;
+
+    if (events && events.length > 0) {
+      const hasCheating = events.some((e) => e.event_type === "cheating");
+
+      const hasSuspicious = events.some((e) => e.event_type === "suspicious");
+
+      if (hasCheating) {
+        finalLabel = "cheating";
+        finalReason = "cheating_detected_during_session";
+      } else if (hasSuspicious) {
+        finalLabel = "suspicious";
+        finalReason = "suspicious_behavior_observed";
+      }
+
+      finalConfidence = Math.max(...events.map((e) => e.confidence_score || 0));
+    }
+
+    // 2️⃣ Update sessions table
+    const { error: updateError } = await supabase
+      .from("sessions")
+      .update({
+        final_label: finalLabel,
+        final_reason: finalReason,
+        final_confidence: finalConfidence,
+        decision_at: new Date().toISOString(),
+        status: finalLabel === "cheating" ? "flagged" : "completed",
+      })
+      .eq("id", session_id);
+
+    if (updateError) {
+      console.error(updateError);
+      return res.status(500).json({
+        error: "Failed to update session",
+      });
+    }
+
+    return res.json({
+      message: "Session finalized successfully",
+      final_label: finalLabel,
+      final_confidence: finalConfidence,
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({
+      error: "Finalization failed",
+    });
+  }
+};
