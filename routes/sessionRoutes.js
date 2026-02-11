@@ -1,5 +1,6 @@
 import express from "express";
 import {
+  createSession,
   getActiveSessions,
   getDashboardSummary,
   getSessionDetails,
@@ -7,8 +8,14 @@ import {
 
 const router = express.Router();
 
+// CREATE session
+router.post("/", createSession);
+
+// DASHBOARD
 router.get("/active", getActiveSessions);
 router.get("/summary", getDashboardSummary);
+
+// SESSION DETAILS
 router.get("/:id", getSessionDetails);
 
 export default router;

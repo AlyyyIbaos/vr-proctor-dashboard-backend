@@ -1,13 +1,60 @@
 import supabase from "../config/supabaseClient.js";
 
 /**
- * GET all live exam sessions
+ * CREATE new exam session
+ * Used when starting a VR exam
+ */
+export const createSession = async (req, res) => {
+  const { exam_id, examinee_id } = req.body;
+
+  if (!exam_id || !examinee_id) {
+    return res.status(400).json({
+      error: "exam_id and examinee_id are required",
+    });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("sessions")
+      .insert([
+        {
+          exam_id,
+          examinee_id,
+          status: "active",
+          risk_level: "Low",
+        },
+      ])
+      .select()
+      .single();
+
+    if (error) {
+      console.error(error);
+      return res.status(500).json({
+        error: "Failed to create session",
+      });
+    }
+
+    res.status(201).json({
+      message: "Session created successfully",
+      session: data,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      error: "Server error",
+    });
+  }
+};
+
+/**
+ * GET all active exam sessions
  * Used in: LiveExamsPage
  */
 export const getActiveSessions = async (req, res) => {
   const { data, error } = await supabase
     .from("sessions")
-    .select(`
+    .select(
+      `
       id,
       status,
       risk_level,
@@ -20,12 +67,15 @@ export const getActiveSessions = async (req, res) => {
         id,
         full_name
       )
-    `)
-    .eq("status", "live");
+    `,
+    )
+    .eq("status", "active");
 
   if (error) {
     console.error(error);
-    return res.status(500).json({ error: "Failed to fetch sessions" });
+    return res.status(500).json({
+      error: "Failed to fetch sessions",
+    });
   }
 
   res.json(data);
@@ -36,20 +86,20 @@ export const getActiveSessions = async (req, res) => {
  * Used in: DashboardPage
  */
 export const getDashboardSummary = async (req, res) => {
-  const { data, error } = await supabase
-    .from("sessions")
-    .select("risk_level");
+  const { data, error } = await supabase.from("sessions").select("risk_level");
 
   if (error) {
     console.error(error);
-    return res.status(500).json({ error: "Failed to fetch summary" });
+    return res.status(500).json({
+      error: "Failed to fetch summary",
+    });
   }
 
   const summary = {
     total: data.length,
-    low: data.filter(s => s.risk_level === "low").length,
-    medium: data.filter(s => s.risk_level === "medium").length,
-    high: data.filter(s => s.risk_level === "high").length,
+    low: data.filter((s) => s.risk_level === "Low").length,
+    medium: data.filter((s) => s.risk_level === "Medium").length,
+    high: data.filter((s) => s.risk_level === "High").length,
   };
 
   res.json(summary);
@@ -64,7 +114,8 @@ export const getSessionDetails = async (req, res) => {
 
   const { data, error } = await supabase
     .from("sessions")
-    .select(`
+    .select(
+      `
       id,
       status,
       risk_level,
@@ -72,6 +123,10 @@ export const getSessionDetails = async (req, res) => {
       max_score,
       started_at,
       ended_at,
+      final_label,
+      final_reason,
+      final_confidence,
+      decision_at,
       exams (
         title
       ),
@@ -86,13 +141,16 @@ export const getSessionDetails = async (req, res) => {
         detected_at,
         details
       )
-    `)
+    `,
+    )
     .eq("id", id)
     .single();
 
   if (error || !data) {
     console.error(error);
-    return res.status(404).json({ error: "Session not found" });
+    return res.status(404).json({
+      error: "Session not found",
+    });
   }
 
   res.json({
@@ -103,8 +161,12 @@ export const getSessionDetails = async (req, res) => {
     max_score: data.max_score,
     started_at: data.started_at,
     ended_at: data.ended_at,
+    final_label: data.final_label,
+    final_reason: data.final_reason,
+    final_confidence: data.final_confidence,
+    decision_at: data.decision_at,
     exam_title: data.exams?.title ?? "Exam",
     examinee_name: data.examinees?.full_name ?? "Examinee",
-    alerts: data.cheating_logs ?? []
+    alerts: data.cheating_logs ?? [],
   });
 };
