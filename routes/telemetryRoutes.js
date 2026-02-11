@@ -1,6 +1,7 @@
 import express from "express";
 import axios from "axios";
 import supabase from "../config/supabaseClient.js";
+import detectionConfig from "../config/detectionConfig.js";
 
 // =========================
 // SESSION STATE (IN-MEMORY)
@@ -15,26 +16,39 @@ const baselineStats = new Map();
 const suspiciousSince = new Map();
 const cheatingSince = new Map();
 
-// STEP 3 STATE
-const lastEmittedLabel = new Map(); // prevents duplicate logs
-const sessionFinalized = new Map(); // ensures final decision once
+const lastEmittedLabel = new Map();
+const sessionFinalized = new Map();
 
 // =========================
-// CONSTANTS
+// CONFIG EXTRACTION
 // =========================
-const SCORE_WINDOW_SIZE = 5;
-const BASELINE_SAMPLES = 5;
+const {
+  INFERENCE_INTERVAL_MS,
+  Z_SCORE_THRESHOLDS,
+  TEMPORAL_RULES,
+  STATISTICAL_WINDOW,
+} = detectionConfig;
 
-const Z_SUSPICIOUS = 1.5;
-const Z_CHEATING = 2.5;
-const CHEATING_COUNT_REQUIRED = 3;
+const Z_SUSPICIOUS = Z_SCORE_THRESHOLDS.SUSPICIOUS;
+const Z_CHEATING = Z_SCORE_THRESHOLDS.CHEATING;
 
-const SUSPICIOUS_PERSIST_MS = 15000;
-const CHEATING_PERSIST_MS = 30000;
+const CHEATING_MIN_CONSECUTIVE = TEMPORAL_RULES.CHEATING_MIN_CONSECUTIVE;
+
+const CHEATING_PERSIST_MS = TEMPORAL_RULES.CHEATING_WINDOW_MS;
+
+const SUSPICIOUS_PERSIST_MS = TEMPORAL_RULES.SUSPICIOUS_PERSIST_MS;
+
+const SCORE_WINDOW_SIZE = STATISTICAL_WINDOW.SCORE_WINDOW_SIZE;
+
+const BASELINE_SAMPLES = STATISTICAL_WINDOW.BASELINE_SAMPLES;
+
+const INFERENCE_MIN_INTERVAL_MS = INFERENCE_INTERVAL_MS;
 
 const WARMUP_MS = 5000;
-const INFERENCE_MIN_INTERVAL_MS = 15000;
 
+// =========================
+// ROUTER
+// =========================
 export default function telemetryRoutes(io) {
   const router = express.Router();
 
@@ -50,7 +64,9 @@ export default function telemetryRoutes(io) {
         telemetry.length !== 60 ||
         telemetry[0].length !== 12
       ) {
-        return res.status(400).json({ error: "Invalid telemetry payload" });
+        return res.status(400).json({
+          error: "Invalid telemetry payload",
+        });
       }
 
       // ---------- SESSION INIT ----------
@@ -75,7 +91,7 @@ export default function telemetryRoutes(io) {
         return res.json({ status: "cooldown" });
       }
 
-      // ---------- INFERENCE ----------
+      // ---------- CALL INFERENCE ----------
       const inferenceResponse = await axios.post(
         `${process.env.INFERENCE_SERVICE_URL}/predict`,
         { session_id, sequence: telemetry },
@@ -83,6 +99,7 @@ export default function telemetryRoutes(io) {
       );
 
       lastInferenceRun.set(session_id, now);
+
       const { cheating_score = 0 } = inferenceResponse.data || {};
 
       // =========================
@@ -100,8 +117,10 @@ export default function telemetryRoutes(io) {
         }
 
         const mean = buf.reduce((a, b) => a + b, 0) / buf.length;
+
         const variance =
-          buf.reduce((s, x) => s + (x - mean) ** 2, 0) / buf.length;
+          buf.reduce((sum, x) => sum + (x - mean) ** 2, 0) / buf.length;
+
         const std = Math.sqrt(variance) || 0.001;
 
         baselineStats.set(session_id, { mean, std });
@@ -110,14 +129,18 @@ export default function telemetryRoutes(io) {
       }
 
       // =========================
-      // Z-SCORE + TEMPORAL WINDOW
+      // Z-SCORE + SLIDING WINDOW
       // =========================
       const { mean, std } = baselineStats.get(session_id);
+
       const z = (cheating_score - mean) / std;
 
       const history = scoreHistory.get(session_id);
       history.push(z);
-      if (history.length > SCORE_WINDOW_SIZE) history.shift();
+
+      if (history.length > SCORE_WINDOW_SIZE) {
+        history.shift();
+      }
 
       const highCount = history.filter((v) => v >= Z_CHEATING).length;
 
@@ -132,9 +155,10 @@ export default function telemetryRoutes(io) {
           suspiciousSince.set(session_id, now);
         }
 
-        const duration = now - suspiciousSince.get(session_id);
+        const suspiciousDuration = now - suspiciousSince.get(session_id);
 
-        if (z >= Z_CHEATING && highCount >= CHEATING_COUNT_REQUIRED) {
+        // ----- CHEATING CONDITION -----
+        if (z >= Z_CHEATING && highCount >= CHEATING_MIN_CONSECUTIVE) {
           if (!cheatingSince.get(session_id)) {
             cheatingSince.set(session_id, now);
           }
@@ -146,7 +170,9 @@ export default function telemetryRoutes(io) {
             label = "suspicious";
             reason = "sustained_abnormal_behavior";
           }
-        } else if (duration >= SUSPICIOUS_PERSIST_MS) {
+        }
+        // ----- SUSPICIOUS CONDITION -----
+        else if (suspiciousDuration >= SUSPICIOUS_PERSIST_MS) {
           label = "suspicious";
           reason = "sustained_abnormal_behavior";
         } else {
@@ -154,15 +180,15 @@ export default function telemetryRoutes(io) {
           reason = "sporadic_anomaly";
         }
       } else {
+        // Recovery
         suspiciousSince.set(session_id, null);
         cheatingSince.set(session_id, null);
       }
 
       // =========================
-      // STEP 3 — DATABASE WRITES
+      // DATABASE WRITES
       // =========================
 
-      // 1️⃣ LOG EVENT ONLY IF LABEL CHANGED
       const previousLabel = lastEmittedLabel.get(session_id);
 
       if (previousLabel !== label) {
@@ -183,7 +209,7 @@ export default function telemetryRoutes(io) {
         }
       }
 
-      // 2️⃣ FINALIZE SESSION ON CHEATING
+      // ----- FINALIZE SESSION -----
       if (label === "cheating" && !sessionFinalized.get(session_id)) {
         try {
           await supabase
@@ -222,7 +248,9 @@ export default function telemetryRoutes(io) {
       });
     } catch (err) {
       console.error("💥 TELEMETRY ERROR:", err);
-      return res.status(500).json({ error: "Telemetry processing failed" });
+      return res.status(500).json({
+        error: "Telemetry processing failed",
+      });
     }
   });
 
