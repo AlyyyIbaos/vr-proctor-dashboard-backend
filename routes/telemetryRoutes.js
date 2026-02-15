@@ -71,9 +71,8 @@ export default function telemetryRoutes(io) {
       // EXTRACT STRUCTURE
       // =========================
       const cheating_score = data.model.cheating_score;
-
       const final_label = data.decision.final_label;
-      const risk_level = data.decision.risk_level?.toLowerCase(); // DB-safe
+      const risk_level = data.decision.risk_level?.toLowerCase() || "low";
       const persistent_flag = data.decision.persistent_flag;
       const risk_score = data.decision.risk_score;
       const dynamic_threshold = data.decision.dynamic_threshold;
@@ -81,7 +80,6 @@ export default function telemetryRoutes(io) {
       const flags = data.explainability.flags || [];
       const reasons = data.explainability.reasons || [];
 
-      // Required column in proctor_events
       const reason_code =
         reasons.length > 0 ? reasons[0] : "context_evaluation";
 
@@ -124,6 +122,32 @@ export default function telemetryRoutes(io) {
         } catch (dbErr) {
           console.error("⚠️ Failed to log proctor event:", dbErr.message);
         }
+      }
+
+      // =========================
+      // ESCALATE SESSION RISK LEVEL
+      // =========================
+      const riskPriority = { low: 1, medium: 2, high: 3 };
+
+      try {
+        const { data: sessionData } = await supabase
+          .from("sessions")
+          .select("risk_level")
+          .eq("id", session_id)
+          .single();
+
+        if (sessionData) {
+          const currentRisk = sessionData.risk_level || "low";
+
+          if (riskPriority[risk_level] > riskPriority[currentRisk]) {
+            await supabase
+              .from("sessions")
+              .update({ risk_level })
+              .eq("id", session_id);
+          }
+        }
+      } catch (err) {
+        console.error("⚠️ Risk escalation failed:", err.message);
       }
 
       // =========================

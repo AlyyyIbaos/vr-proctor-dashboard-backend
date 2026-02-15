@@ -15,7 +15,7 @@ export const createCheatingLog = async (req, res) => {
   } = req.body;
 
   // =========================
-  // VALIDATION (STRICT)
+  // VALIDATION
   // =========================
   if (!session_id || confidence_level === undefined || !details) {
     return res.status(400).json({
@@ -72,42 +72,50 @@ export const createCheatingLog = async (req, res) => {
   }
 
   // =========================
-  // UPDATE SESSION RISK LEVEL
+  // ESCALATE SESSION RISK
   // =========================
-  const risk_level = detectionConfig.SEVERITY_RISK_MAP[severity] || "Low";
+  const riskMap = {
+    low: 1,
+    medium: 2,
+    high: 3,
+  };
 
-  const { error: sessionError } = await supabase
+  const newRisk = severity.toLowerCase();
+
+  const { data: sessionData } = await supabase
     .from("sessions")
-    .update({ risk_level })
-    .eq("id", session_id);
+    .select("risk_level")
+    .eq("id", session_id)
+    .single();
 
-  if (sessionError) {
-    console.error(sessionError);
-    return res.status(500).json({
-      error: "Failed to update session risk level",
-    });
+  if (sessionData) {
+    const currentRisk = sessionData.risk_level || "low";
+
+    if (riskMap[newRisk] > riskMap[currentRisk]) {
+      await supabase
+        .from("sessions")
+        .update({ risk_level: newRisk })
+        .eq("id", session_id);
+    }
   }
 
   // =========================
-  // SOCKET.IO — LIVE ALERT
+  // SOCKET.IO LIVE ALERT
   // =========================
   const io = req.app.get("io");
   if (io) {
     io.to(session_id).emit("new_alert", data);
-  } else {
-    console.warn("⚠️ Socket.IO instance not found on app");
   }
 
   res.status(201).json({
     message: "Cheating log created",
-    risk_level,
+    risk_level: newRisk,
     log: data,
   });
 };
 
 /**
  * GET cheating logs by session
- * Used by: Proctor / dashboard
  */
 export const getCheatingLogsBySession = async (req, res) => {
   const { sessionId } = req.params;
@@ -131,7 +139,6 @@ export const getCheatingLogsBySession = async (req, res) => {
 /**
  * FINALIZE SESSION
  * Computes final verdict based on proctor_events
- * Called when VR exam session ends
  */
 export const finalizeSession = async (req, res) => {
   const { session_id } = req.body;
@@ -162,7 +169,6 @@ export const finalizeSession = async (req, res) => {
 
     if (events && events.length > 0) {
       const hasCheating = events.some((e) => e.event_type === "cheating");
-
       const hasSuspicious = events.some((e) => e.event_type === "suspicious");
 
       if (hasCheating) {
@@ -176,7 +182,15 @@ export const finalizeSession = async (req, res) => {
       finalConfidence = Math.max(...events.map((e) => e.confidence_score || 0));
     }
 
-    // 2️⃣ Update sessions table
+    // Determine final risk
+    const finalRisk =
+      finalLabel === "cheating"
+        ? "high"
+        : finalLabel === "suspicious"
+          ? "medium"
+          : "low";
+
+    // 2️⃣ Update session
     const { error: updateError } = await supabase
       .from("sessions")
       .update({
@@ -184,6 +198,8 @@ export const finalizeSession = async (req, res) => {
         final_reason: finalReason,
         final_confidence: finalConfidence,
         decision_at: new Date().toISOString(),
+        ended_at: new Date().toISOString(),
+        risk_level: finalRisk,
         status: finalLabel === "cheating" ? "flagged" : "completed",
       })
       .eq("id", session_id);
