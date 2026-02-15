@@ -1,35 +1,32 @@
 import express from "express";
 import axios from "axios";
 import supabase from "../config/supabaseClient.js";
-import detectionConfig from "../config/detectionConfig.js";
 
 // =========================
 // SESSION STATE (IN-MEMORY)
 // =========================
 const lastInferenceRun = new Map();
-const sessionStartTime = new Map();
-
-const scoreHistory = new Map();
-const baselineBuffer = new Map();
-const baselineStats = new Map();
-
-const suspiciousSince = new Map();
-const cheatingSince = new Map();
-
 const lastEmittedLabel = new Map();
+const lastPersistentState = new Map();
 
-// =========================
-// ROUTER
-// =========================
 export default function telemetryRoutes(io) {
   const router = express.Router();
 
   router.post("/telemetry", async (req, res) => {
     try {
-      const { session_id, telemetry } = req.body;
+      const {
+        session_id,
+        telemetry,
+        phase = "Exam",
+        speech_allowed = false,
+        tracking_ok = true,
+      } = req.body;
+
       const now = Date.now();
 
-      // ---------- VALIDATION ----------
+      // =========================
+      // VALIDATION
+      // =========================
       if (
         !session_id ||
         !telemetry ||
@@ -39,165 +36,118 @@ export default function telemetryRoutes(io) {
         return res.status(400).json({ error: "Invalid telemetry payload" });
       }
 
-      // ---------- SESSION INIT ----------
-      if (!sessionStartTime.has(session_id)) {
-        sessionStartTime.set(session_id, now);
-        scoreHistory.set(session_id, []);
-        baselineBuffer.set(session_id, []);
-        suspiciousSince.set(session_id, null);
-        cheatingSince.set(session_id, null);
-        lastEmittedLabel.set(session_id, null);
-      }
-
-      // ---------- WARM-UP ----------
-      if (now - sessionStartTime.get(session_id) < detectionConfig.WARMUP_MS) {
-        return res.json({ status: "warming_up" });
-      }
-
-      // ---------- COOLDOWN ----------
+      // =========================
+      // LIGHT COOLDOWN (2s)
+      // =========================
       const lastRun = lastInferenceRun.get(session_id);
-      if (
-        lastRun &&
-        now - lastRun < detectionConfig.INFERENCE_MIN_INTERVAL_MS
-      ) {
+      if (lastRun && now - lastRun < 2000) {
         return res.json({ status: "cooldown" });
       }
 
-      // ---------- INFERENCE ----------
+      // =========================
+      // CALL FASTAPI
+      // =========================
       const inferenceResponse = await axios.post(
         `${process.env.INFERENCE_SERVICE_URL}/predict`,
-        { session_id, sequence: telemetry },
+        {
+          session_id,
+          phase,
+          speech_allowed,
+          tracking_ok,
+          sequence: telemetry,
+        },
         { timeout: 120000 },
       );
 
       lastInferenceRun.set(session_id, now);
 
-      const { cheating_score = 0 } = inferenceResponse.data || {};
+      const data = inferenceResponse.data;
 
-      // =========================
-      // BASELINE CALIBRATION
-      // =========================
-      if (!baselineStats.has(session_id)) {
-        const buf = baselineBuffer.get(session_id);
-        buf.push(cheating_score);
-
-        if (buf.length < detectionConfig.BASELINE_SAMPLES) {
-          return res.json({
-            status: "calibrating",
-            collected: buf.length,
-          });
-        }
-
-        const mean = buf.reduce((a, b) => a + b, 0) / buf.length;
-
-        const variance =
-          buf.reduce((s, x) => s + (x - mean) ** 2, 0) / buf.length;
-
-        const std = Math.sqrt(variance) || 0.001;
-
-        baselineStats.set(session_id, { mean, std });
-
-        return res.json({ status: "baseline_ready" });
+      if (data.status !== "ok") {
+        return res.json(data);
       }
 
       // =========================
-      // Z-SCORE + TEMPORAL WINDOW
+      // EXTRACT STRUCTURE
       // =========================
-      const { mean, std } = baselineStats.get(session_id);
-      const z = (cheating_score - mean) / std;
+      const cheating_score = data.model.cheating_score;
 
-      const history = scoreHistory.get(session_id);
-      history.push(z);
-      if (history.length > detectionConfig.SCORE_WINDOW_SIZE) {
-        history.shift();
+      const final_label = data.decision.final_label;
+      const risk_level = data.decision.risk_level?.toLowerCase(); // DB-safe
+      const persistent_flag = data.decision.persistent_flag;
+      const risk_score = data.decision.risk_score;
+      const dynamic_threshold = data.decision.dynamic_threshold;
+
+      const flags = data.explainability.flags || [];
+      const reasons = data.explainability.reasons || [];
+
+      // Required column in proctor_events
+      const reason_code =
+        reasons.length > 0 ? reasons[0] : "context_evaluation";
+
+      // =========================
+      // TRANSITION LOGIC ONLY
+      // =========================
+      if (!lastEmittedLabel.has(session_id)) {
+        lastEmittedLabel.set(session_id, null);
       }
 
-      const highCount = history.filter(
-        (v) => v >= detectionConfig.Z_CHEATING,
-      ).length;
-
-      // =========================
-      // DECISION LOGIC
-      // =========================
-      let label = "normal";
-      let reason = "normal_behavior";
-
-      if (z >= detectionConfig.Z_SUSPICIOUS) {
-        if (!suspiciousSince.get(session_id)) {
-          suspiciousSince.set(session_id, now);
-        }
-
-        const duration = now - suspiciousSince.get(session_id);
-
-        if (
-          z >= detectionConfig.Z_CHEATING &&
-          highCount >= detectionConfig.CHEATING_MIN_CONSECUTIVE
-        ) {
-          if (!cheatingSince.get(session_id)) {
-            cheatingSince.set(session_id, now);
-          }
-
-          if (
-            now - cheatingSince.get(session_id) >=
-            detectionConfig.CHEATING_PERSIST_MS
-          ) {
-            label = "cheating";
-            reason = "consistent_high_deviation";
-          } else {
-            label = "suspicious";
-            reason = "sustained_abnormal_behavior";
-          }
-        } else if (duration >= detectionConfig.SUSPICIOUS_PERSIST_MS) {
-          label = "suspicious";
-          reason = "sustained_abnormal_behavior";
-        } else {
-          label = "suspicious";
-          reason = "sporadic_anomaly";
-        }
-      } else {
-        suspiciousSince.set(session_id, null);
-        cheatingSince.set(session_id, null);
+      if (!lastPersistentState.has(session_id)) {
+        lastPersistentState.set(session_id, false);
       }
 
-      // =========================
-      // LOG TRANSITIONS ONLY
-      // =========================
       const previousLabel = lastEmittedLabel.get(session_id);
+      const previousPersistent = lastPersistentState.get(session_id);
 
-      if (previousLabel !== label) {
+      const labelChanged = previousLabel !== final_label;
+      const persistenceActivated =
+        persistent_flag === true && previousPersistent !== true;
+
+      if (labelChanged || persistenceActivated) {
         try {
           await supabase.from("proctor_events").insert([
             {
               session_id,
-              event_type: label,
-              reason_code: reason,
+              event_type: final_label,
+              reason_code,
               confidence_score: cheating_score,
-              z_score: z,
+              risk_score,
+              dynamic_threshold,
+              persistent_flag,
+              flags,
+              reasons,
             },
           ]);
 
-          lastEmittedLabel.set(session_id, label);
+          lastEmittedLabel.set(session_id, final_label);
+          lastPersistentState.set(session_id, persistent_flag);
         } catch (dbErr) {
           console.error("⚠️ Failed to log proctor event:", dbErr.message);
         }
       }
 
-      // ---------- EMIT ----------
+      // =========================
+      // EMIT TO DASHBOARD
+      // =========================
       io.emit("live_status", {
         session_id,
-        prediction: label,
+        prediction: final_label,
         confidence: cheating_score,
-        reason,
-        z_score: z,
+        risk_level,
+        persistent_flag,
+        risk_score,
+        dynamic_threshold,
+        flags,
         timestamp: new Date().toISOString(),
       });
 
       return res.json({
         status: "ok",
-        label,
-        reason,
-        cheating_score,
-        z_score: z,
+        final_label,
+        risk_level,
+        persistent_flag,
+        risk_score,
+        dynamic_threshold,
       });
     } catch (err) {
       console.error("💥 TELEMETRY ERROR:", err);
