@@ -68,7 +68,7 @@ export default function telemetryRoutes(io) {
       }
 
       // =========================
-      // EXTRACT STRUCTURE
+      // EXTRACT MODEL OUTPUT
       // =========================
       const cheating_score = data.model.cheating_score;
       const final_label = data.decision.final_label;
@@ -76,12 +76,32 @@ export default function telemetryRoutes(io) {
       const persistent_flag = data.decision.persistent_flag;
       const risk_score = data.decision.risk_score;
       const dynamic_threshold = data.decision.dynamic_threshold;
+      const window_exceeded = data.decision.window_exceeded;
 
       const flags = data.explainability.flags || [];
       const reasons = data.explainability.reasons || [];
 
       const reason_code =
         reasons.length > 0 ? reasons[0] : "context_evaluation";
+
+      // =========================
+      // 🔍 LOG EVERY WINDOW
+      // =========================
+      try {
+        await supabase.from("inference_logs").insert([
+          {
+            session_id,
+            p_move: cheating_score,
+            risk_score,
+            dynamic_threshold,
+            window_exceeded,
+            persistent_flag,
+            risk_level,
+          },
+        ]);
+      } catch (logErr) {
+        console.error("⚠️ Failed to log inference window:", logErr.message);
+      }
 
       // =========================
       // TRANSITION LOGIC ONLY
@@ -125,7 +145,7 @@ export default function telemetryRoutes(io) {
       }
 
       // =========================
-      // ESCALATE SESSION RISK LEVEL
+      // ESCALATE SESSION RISK
       // =========================
       const riskPriority = { low: 1, medium: 2, high: 3 };
 
