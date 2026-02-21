@@ -12,6 +12,11 @@ export const createCheatingLog = async (req, res) => {
     severity = "low",
     confidence_level,
     details,
+
+    // 🔽 NEW FIELDS FOR RUNTIME SECURITY EVALUATION
+    detection_time,
+    detection_frame,
+    attack_phase,
   } = req.body;
 
   // =========================
@@ -60,6 +65,11 @@ export const createCheatingLog = async (req, res) => {
       severity,
       confidence_level,
       details,
+
+      // 🔽 INSERT NEW RUNTIME FIELDS
+      detection_time,
+      detection_frame,
+      attack_phase,
     })
     .select()
     .single();
@@ -150,7 +160,6 @@ export const finalizeSession = async (req, res) => {
   }
 
   try {
-    // 1️⃣ Fetch monitoring events
     const { data: events, error } = await supabase
       .from("proctor_events")
       .select("*")
@@ -182,7 +191,6 @@ export const finalizeSession = async (req, res) => {
       finalConfidence = Math.max(...events.map((e) => e.confidence_score || 0));
     }
 
-    // Determine final risk
     const finalRisk =
       finalLabel === "cheating"
         ? "high"
@@ -190,7 +198,6 @@ export const finalizeSession = async (req, res) => {
           ? "medium"
           : "low";
 
-    // 2️⃣ Update session
     const { error: updateError } = await supabase
       .from("sessions")
       .update({
