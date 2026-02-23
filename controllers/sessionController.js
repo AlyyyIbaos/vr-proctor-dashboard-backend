@@ -2,26 +2,64 @@ import supabase from "../config/supabaseClient.js";
 
 /**
  * CREATE new exam session
- * Used when starting a VR exam
+ * Requires verified auth session
  */
 export const createSession = async (req, res) => {
-  const { exam_id, examinee_id } = req.body;
-
-  if (!exam_id || !examinee_id) {
-    return res.status(400).json({
-      error: "exam_id and examinee_id are required",
-    });
-  }
-
   try {
-    const { data, error } = await supabase
+    const { exam_id } = req.body;
+
+    if (!exam_id) {
+      return res.status(400).json({
+        error: "exam_id is required",
+      });
+    }
+
+    const { user_id, role } = req.auth;
+
+    // Only students can create exam sessions
+    if (role !== "student") {
+      return res.status(403).json({
+        error: "Only students can create exam sessions",
+      });
+    }
+
+    // Get examinee profile from authenticated user
+    const { data: examinee, error: examineeError } = await supabase
+      .from("examinees")
+      .select("id")
+      .eq("user_id", user_id)
+      .single();
+
+    if (examineeError || !examinee) {
+      return res.status(404).json({
+        error: "Examinee profile not found",
+      });
+    }
+
+    // Prevent duplicate active session for same exam
+    const { data: existingSession } = await supabase
+      .from("sessions")
+      .select("id")
+      .eq("exam_id", exam_id)
+      .eq("examinee_id", examinee.id)
+      .eq("status", "active")
+      .single();
+
+    if (existingSession) {
+      return res.status(400).json({
+        error: "You already have an active session for this exam",
+      });
+    }
+
+    // Create session
+    const { data: session, error } = await supabase
       .from("sessions")
       .insert([
         {
           exam_id,
-          examinee_id,
+          examinee_id: examinee.id,
           status: "active",
-          risk_level: "Low",
+          risk_level: "low",
         },
       ])
       .select()
@@ -36,7 +74,7 @@ export const createSession = async (req, res) => {
 
     res.status(201).json({
       message: "Session created successfully",
-      session: data,
+      session,
     });
   } catch (err) {
     console.error(err);
@@ -51,34 +89,63 @@ export const createSession = async (req, res) => {
  * Used in: LiveExamsPage
  */
 export const getActiveSessions = async (req, res) => {
-  const { data, error } = await supabase
-    .from("sessions")
-    .select(
-      `
-      id,
-      status,
-      risk_level,
-      started_at,
-      exams (
-        id,
-        title
-      ),
-      examinees (
-        id,
-        full_name
-      )
-    `,
-    )
-    .eq("status", "active");
+  try {
+    const { user_id, role } = req.auth;
 
-  if (error) {
-    console.error(error);
-    return res.status(500).json({
-      error: "Failed to fetch sessions",
+    let query = supabase
+      .from("sessions")
+      .select(
+        `
+        id,
+        status,
+        risk_level,
+        started_at,
+        exams (
+          id,
+          title
+        ),
+        examinees (
+          id,
+          full_name,
+          user_id
+        )
+      `,
+      )
+      .eq("status", "active");
+
+    // If student → filter to own sessions only
+    if (role === "student") {
+      const { data: examinee } = await supabase
+        .from("examinees")
+        .select("id")
+        .eq("user_id", user_id)
+        .single();
+
+      if (!examinee) {
+        return res.status(404).json({
+          error: "Examinee profile not found",
+        });
+      }
+
+      query = query.eq("examinee_id", examinee.id);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.error(error);
+      return res.status(500).json({
+        error: "Failed to fetch sessions",
+      });
+    }
+
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      error: "Server error",
     });
   }
-
-  res.json(data);
 };
 
 /**
