@@ -42,13 +42,13 @@ console.log("✅ Socket.IO initialized");
 // ==============================
 app.set("io", io);
 app.use("/api/auth", authRoutes);
-app.use("/api/sessions", requireVerifiedSession, sessionRoutes);
+app.use("/api/sessions", sessionRoutes);
 app.use("/api/detections", detectionRoutes);
 app.use("/api/exams", examRoutes);
 app.use("/api/vr", vrTestRoutes);
 app.use("/api/vr", vrScoreRoutes);
 app.use("/api", testInferenceRoute);
-app.use("/api/vr", requireVerifiedSession, telemetryRoutes(io));
+app.use("/api/vr", telemetryRoutes(io));
 
 // ==============================
 // SOCKET.IO ALERTS
