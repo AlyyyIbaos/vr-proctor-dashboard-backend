@@ -14,6 +14,7 @@ import vrTestRoutes from "./routes/vrTestRoutes.js";
 import vrScoreRoutes from "./routes/vrScoreRoutes.js";
 import testInferenceRoute from "./routes/testInference.js";
 import telemetryRoutes from "./routes/telemetryRoutes.js";
+import aggregationRoutes from "./routes/aggregationRoutes.js";
 
 // SOCKETS
 import alertSocket from "./sockets/alertSocket.js";
@@ -48,6 +49,7 @@ app.use("/api/vr", vrTestRoutes);
 app.use("/api/vr", vrScoreRoutes);
 app.use("/api", testInferenceRoute);
 app.use("/api/vr", telemetryRoutes(io));
+app.use("/api/sessions", aggregationRoutes);
 
 // ==============================
 // SOCKET.IO ALERTS

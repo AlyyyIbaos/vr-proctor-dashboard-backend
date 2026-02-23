@@ -1,3 +1,8 @@
+import express from "express";
+import supabase from "../config/supabaseClient.js";
+
+const router = express.Router();
+
 // ===============================
 // STUDENT BEHAVIORAL REPORT
 // ===============================
@@ -9,7 +14,8 @@ router.get("/:id/behavioral-report", async (req, res) => {
       .from("inference_logs")
       .select("*")
       .eq("session_id", id)
-      .order("question_index", { ascending: true });
+      .order("question_index", { ascending: true })
+      .order("window_index", { ascending: true }); // important for clean ordering
 
     if (error) {
       console.error(error);
@@ -37,7 +43,7 @@ router.get("/:id/behavioral-report", async (req, res) => {
       }
 
       grouped[q].total_windows += 1;
-      grouped[q].prob_sum += log.prob_cheat;
+      grouped[q].prob_sum += log.prob_cheat ?? 0;
 
       if (log.pred_raw === 1 || log.cat_active === 1) {
         grouped[q].flagged_windows += 1;
@@ -54,7 +60,8 @@ router.get("/:id/behavioral-report", async (req, res) => {
     });
 
     const result = Object.values(grouped).map((q) => {
-      const avg_probability = q.prob_sum / q.total_windows;
+      const avg_probability =
+        q.total_windows > 0 ? q.prob_sum / q.total_windows : 0;
 
       const final_label = q.flagged_windows >= 3 ? "cheating" : "normal";
 
@@ -77,3 +84,5 @@ router.get("/:id/behavioral-report", async (req, res) => {
     });
   }
 });
+
+export default router;
