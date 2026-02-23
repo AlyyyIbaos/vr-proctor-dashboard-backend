@@ -12,9 +12,9 @@ POST /api/sessions/start
 */
 router.post("/start", requireVerifiedSession, async (req, res) => {
   try {
-    const studentId = req.auth.user_id;
+    const userId = req.auth.user_id;
 
-    // 🔎 1️⃣ Find a LIVE exam (matches your DB constraint)
+    // 1️⃣ Find LIVE exam
     const { data: exam, error: examError } = await supabase
       .from("exams")
       .select("*")
@@ -23,20 +23,33 @@ router.post("/start", requireVerifiedSession, async (req, res) => {
       .single();
 
     if (examError || !exam) {
-      console.error("NO LIVE EXAM FOUND:", examError);
       return res.status(400).json({
         error: "No live exam available",
       });
     }
 
-    // 📝 2️⃣ Create a session
+    // 2️⃣ Find examinee record for this user
+    const { data: examinee, error: examineeError } = await supabase
+      .from("examinees")
+      .select("id")
+      .eq("user_id", userId)
+      .single();
+
+    if (examineeError || !examinee) {
+      console.error("EXAMINEE NOT FOUND:", examineeError);
+      return res.status(400).json({
+        error: "Examinee profile not found",
+      });
+    }
+
+    // 3️⃣ Create session using examinee.id
     const { data: session, error: sessionError } = await supabase
       .from("sessions")
       .insert([
         {
           exam_id: exam.id,
-          examinee_id: studentId,
-          status: "active", // session state
+          examinee_id: examinee.id,
+          status: "active",
           risk_level: "low",
           score: 0,
           max_score: 0,
@@ -71,13 +84,24 @@ GET /api/sessions/current
 */
 router.get("/current", requireVerifiedSession, async (req, res) => {
   try {
-    const studentId = req.auth.user_id;
+    const userId = req.auth.user_id;
+
+    // Find examinee first
+    const { data: examinee } = await supabase
+      .from("examinees")
+      .select("id")
+      .eq("user_id", userId)
+      .single();
+
+    if (!examinee) {
+      return res.json(null);
+    }
 
     const { data: session, error } = await supabase
       .from("sessions")
       .select("*, exams(*)")
-      .eq("examinee_id", studentId)
-      .eq("status", "active") // session must be active
+      .eq("examinee_id", examinee.id)
+      .eq("status", "active")
       .order("started_at", { ascending: false })
       .limit(1)
       .single();
