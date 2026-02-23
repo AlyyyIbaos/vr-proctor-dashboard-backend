@@ -4,32 +4,29 @@ import { requireVerifiedSession } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
-// 🔐 Require verified session for all routes
-router.use(requireVerifiedSession);
+router.get(
+  "/:id/behavioral-report",
+  requireVerifiedSession,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { user_id, role } = req.auth;
 
-// ===============================
-// STUDENT BEHAVIORAL REPORT
-// ===============================
-router.get("/:id/behavioral-report", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { user_id, role } = req.auth;
+      if (role !== "student") {
+        return res.status(403).json({ error: "Access denied" });
+      }
 
-    // ===============================
-    // 🔒 OWNERSHIP VALIDATION
-    // ===============================
-    const { data: session, error: sessionError } = await supabase
-      .from("sessions")
-      .select("id, examinee_id")
-      .eq("id", id)
-      .single();
+      // Ensure session belongs to student
+      const { data: session } = await supabase
+        .from("sessions")
+        .select("examinee_id")
+        .eq("id", id)
+        .single();
 
-    if (sessionError || !session) {
-      return res.status(404).json({ error: "Session not found" });
-    }
+      if (!session) {
+        return res.status(404).json({ error: "Session not found" });
+      }
 
-    // If student → ensure session belongs to them
-    if (role === "student") {
       const { data: examinee } = await supabase
         .from("examinees")
         .select("id")
@@ -37,88 +34,80 @@ router.get("/:id/behavioral-report", async (req, res) => {
         .single();
 
       if (!examinee || examinee.id !== session.examinee_id) {
-        return res.status(403).json({
-          error: "Access denied: not your session",
-        });
+        return res.status(403).json({ error: "Unauthorized access" });
       }
-    }
 
-    // ===============================
-    // FETCH INFERENCE LOGS
-    // ===============================
-    const { data: logs, error } = await supabase
-      .from("inference_logs")
-      .select("*")
-      .eq("session_id", id)
-      .order("question_index", { ascending: true })
-      .order("window_index", { ascending: true });
+      const { data: logs, error } = await supabase
+        .from("inference_logs")
+        .select("*")
+        .eq("session_id", id)
+        .order("question_index", { ascending: true })
+        .order("window_index", { ascending: true });
 
-    if (error) {
-      console.error(error);
-      return res.status(500).json({ error: "Failed to fetch logs" });
-    }
+      if (error) {
+        return res.status(500).json({ error: "Failed to fetch logs" });
+      }
 
-    if (!logs || logs.length === 0) {
-      return res.json([]);
-    }
+      if (!logs || logs.length === 0) {
+        return res.json([]);
+      }
 
-    const grouped = {};
+      const grouped = {};
 
-    logs.forEach((log) => {
-      const q = log.question_index;
+      logs.forEach((log) => {
+        const q = log.question_index;
 
-      if (!grouped[q]) {
-        grouped[q] = {
-          question_index: q,
-          total_windows: 0,
-          flagged_windows: 0,
-          prob_sum: 0,
+        if (!grouped[q]) {
+          grouped[q] = {
+            question_index: q,
+            total_windows: 0,
+            flagged_windows: 0,
+            prob_sum: 0,
+            decision_mode: log.decision_mode,
+            windows: [],
+          };
+        }
+
+        grouped[q].total_windows += 1;
+        grouped[q].prob_sum += log.prob_cheat ?? 0;
+
+        if (log.pred_raw === 1 || log.cat_active === 1) {
+          grouped[q].flagged_windows += 1;
+        }
+
+        grouped[q].windows.push({
+          window_index: log.window_index,
+          prob_cheat: log.prob_cheat,
+          pred_raw: log.pred_raw,
+          cat_active: log.cat_active,
+          cat_transition: log.cat_transition,
           decision_mode: log.decision_mode,
-          windows: [],
-        };
-      }
-
-      grouped[q].total_windows += 1;
-      grouped[q].prob_sum += log.prob_cheat ?? 0;
-
-      if (log.pred_raw === 1 || log.cat_active === 1) {
-        grouped[q].flagged_windows += 1;
-      }
-
-      grouped[q].windows.push({
-        window_index: log.window_index,
-        prob_cheat: log.prob_cheat,
-        pred_raw: log.pred_raw,
-        cat_active: log.cat_active,
-        cat_transition: log.cat_transition,
-        decision_mode: log.decision_mode,
+        });
       });
-    });
 
-    const result = Object.values(grouped).map((q) => {
-      const avg_probability =
-        q.total_windows > 0 ? q.prob_sum / q.total_windows : 0;
+      const result = Object.values(grouped).map((q) => {
+        const avg_probability =
+          q.total_windows > 0 ? q.prob_sum / q.total_windows : 0;
 
-      const final_label = q.flagged_windows >= 3 ? "cheating" : "normal";
+        const final_label = q.flagged_windows >= 3 ? "cheating" : "normal";
 
-      return {
-        question_index: q.question_index,
-        total_windows: q.total_windows,
-        flagged_windows: q.flagged_windows,
-        avg_probability,
-        decision_mode: q.decision_mode,
-        final_label,
-        windows: q.windows,
-      };
-    });
+        return {
+          question_index: q.question_index,
+          total_windows: q.total_windows,
+          flagged_windows: q.flagged_windows,
+          avg_probability,
+          decision_mode: q.decision_mode,
+          final_label,
+          windows: q.windows,
+        };
+      });
 
-    res.json(result);
-  } catch (err) {
-    console.error("BEHAVIORAL REPORT ERROR:", err);
-    res.status(500).json({
-      error: "Failed to generate behavioral report",
-    });
-  }
-});
+      res.json(result);
+    } catch (err) {
+      console.error("BEHAVIORAL REPORT ERROR:", err);
+      res.status(500).json({ error: "Failed to generate report" });
+    }
+  },
+);
 
 export default router;
