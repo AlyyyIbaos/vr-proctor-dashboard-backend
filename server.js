@@ -23,7 +23,12 @@ import alertSocket from "./sockets/alertSocket.js";
 // APP SETUP
 // ==============================
 const app = express();
-app.use(cors());
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+  }),
+);
 app.use(express.json());
 app.use(morgan("dev"));
 
