@@ -6,7 +6,7 @@ const router = express.Router();
 
 /*
 ==================================================
-START NEW SESSION (Auto after login)
+START NEW SESSION
 POST /api/sessions/start
 ==================================================
 */
@@ -14,28 +14,29 @@ router.post("/start", requireVerifiedSession, async (req, res) => {
   try {
     const studentId = req.auth.user_id;
 
-    // 1️⃣ Find an active exam (for now pick first active exam)
+    // 🔎 1️⃣ Find a LIVE exam (matches your DB constraint)
     const { data: exam, error: examError } = await supabase
       .from("exams")
       .select("*")
-      .eq("status", "active")
+      .eq("status", "live")
       .limit(1)
       .single();
 
     if (examError || !exam) {
+      console.error("NO LIVE EXAM FOUND:", examError);
       return res.status(400).json({
-        error: "No active exam available",
+        error: "No live exam available",
       });
     }
 
-    // 2️⃣ Create session
+    // 📝 2️⃣ Create a session
     const { data: session, error: sessionError } = await supabase
       .from("sessions")
       .insert([
         {
           exam_id: exam.id,
           examinee_id: studentId,
-          status: "active",
+          status: "active", // session state
           risk_level: "low",
           score: 0,
           max_score: 0,
@@ -76,7 +77,7 @@ router.get("/current", requireVerifiedSession, async (req, res) => {
       .from("sessions")
       .select("*, exams(*)")
       .eq("examinee_id", studentId)
-      .eq("status", "live")
+      .eq("status", "active") // session must be active
       .order("started_at", { ascending: false })
       .limit(1)
       .single();
