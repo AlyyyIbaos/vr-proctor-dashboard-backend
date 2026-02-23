@@ -1,6 +1,6 @@
 import express from "express";
 import supabase from "../config/supabaseClient.js";
-import { authMiddleware } from "../middleware/authMiddleware.js";
+import { requireVerifiedSession } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
@@ -10,11 +10,11 @@ START NEW SESSION (Auto after login)
 POST /api/sessions/start
 ==================================================
 */
-router.post("/start", authMiddleware, async (req, res) => {
+router.post("/start", requireVerifiedSession, async (req, res) => {
   try {
-    const studentId = req.user.id;
+    const studentId = req.auth.user_id;
 
-    // 1️⃣ Find an exam (for now pick first active exam)
+    // 1️⃣ Find an active exam (for now pick first active exam)
     const { data: exam, error: examError } = await supabase
       .from("exams")
       .select("*")
@@ -43,20 +43,20 @@ router.post("/start", authMiddleware, async (req, res) => {
           started_at: new Date().toISOString(),
         },
       ])
-      .select()
+      .select("*, exams(*)")
       .single();
 
     if (sessionError) {
-      console.error(sessionError);
+      console.error("SESSION INSERT ERROR:", sessionError);
       return res.status(500).json({
         error: "Failed to create session",
       });
     }
 
-    res.json(session);
+    return res.json(session);
   } catch (err) {
     console.error("START SESSION ERROR:", err);
-    res.status(500).json({
+    return res.status(500).json({
       error: "Server error starting session",
     });
   }
@@ -68,9 +68,9 @@ GET CURRENT ACTIVE SESSION
 GET /api/sessions/current
 ==================================================
 */
-router.get("/current", authMiddleware, async (req, res) => {
+router.get("/current", requireVerifiedSession, async (req, res) => {
   try {
-    const studentId = req.user.id;
+    const studentId = req.auth.user_id;
 
     const { data: session, error } = await supabase
       .from("sessions")
@@ -85,10 +85,10 @@ router.get("/current", authMiddleware, async (req, res) => {
       return res.json(null);
     }
 
-    res.json(session);
+    return res.json(session);
   } catch (err) {
     console.error("GET CURRENT SESSION ERROR:", err);
-    res.status(500).json({
+    return res.status(500).json({
       error: "Failed to fetch current session",
     });
   }
