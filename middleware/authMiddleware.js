@@ -1,29 +1,73 @@
 import jwt from "jsonwebtoken";
+import supabase from "../config/supabaseClient.js";
 
-export function verifyToken(req, res, next) {
+const DEV_BYPASS_AUTH = process.env.DEV_BYPASS_AUTH === "true";
+
+export async function requireVerifiedSession(req, res, next) {
   try {
-    const token = req.headers.authorization?.split(" ")[1];
+    // =========================
+    // 🚧 DEV MODE BYPASS
+    // =========================
+    if (DEV_BYPASS_AUTH) {
+      console.warn("⚠️ DEV_BYPASS_AUTH ENABLED");
 
-    if (!token) {
-      return res.status(401).json({ error: "Access Denied. No Token." });
+      // Fake auth context for testing
+      req.auth = {
+        user_id: "dev-user",
+        role: "student",
+      };
+
+      return next();
     }
+
+    // =========================
+    // NORMAL AUTH FLOW
+    // =========================
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ error: "Missing authorization token" });
+    }
+
+    const token = authHeader.split(" ")[1];
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    req.user = decoded; // { id, role, name }
-    next();
+    const { auth_session_id, user_id, role } = decoded;
 
-  } catch (err) {
-    console.error("JWT Error:", err);
-    res.status(403).json({ error: "Invalid or expired token" });
-  }
-}
-
-export function requireRole(role) {
-  return (req, res, next) => {
-    if (req.user.role !== role) {
-      return res.status(403).json({ error: "Access denied. Wrong role." });
+    if (!auth_session_id || !user_id) {
+      return res.status(401).json({ error: "Invalid session token payload" });
     }
+
+    const { data: authSession, error } = await supabase
+      .from("auth_sessions")
+      .select("status, expires_at")
+      .eq("id", auth_session_id)
+      .single();
+
+    if (error || !authSession) {
+      return res
+        .status(401)
+        .json({ error: "Authentication session not found" });
+    }
+
+    if (authSession.status !== "verified") {
+      return res.status(403).json({ error: "Session not verified" });
+    }
+
+    if (new Date(authSession.expires_at) < new Date()) {
+      return res.status(401).json({ error: "Authentication session expired" });
+    }
+
+    req.auth = {
+      auth_session_id,
+      user_id,
+      role,
+    };
+
     next();
-  };
+  } catch (err) {
+    console.error("AUTH MIDDLEWARE ERROR:", err.message);
+    return res.status(401).json({ error: "Invalid or expired exam session" });
+  }
 }

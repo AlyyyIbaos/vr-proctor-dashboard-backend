@@ -1,68 +1,39 @@
 import express from "express";
-import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
-import User from "../models/User.js";
+import rateLimit from "express-rate-limit";
+import {
+  registerStudent,
+  requestOtp,
+  verifyOtp,
+} from "../controllers/authController.js";
 
 const router = express.Router();
 
-// ------------------------
-// LOGIN
-// ------------------------
-router.post("/login", async (req, res) => {
-  try {
-    const { username, password } = req.body;
+/**
+ * ============================
+ * RATE LIMITERS
+ * ============================
+ */
 
-    const user = await User.findOne({ username });
-    if (!user) return res.status(400).json({ error: "User not found" });
-
-    const passwordMatch = await bcrypt.compare(password, user.password);
-    if (!passwordMatch) return res.status(400).json({ error: "Incorrect password" });
-
-    // JWT Token
-    const token = jwt.sign(
-      { id: user._id, role: user.role },
-      process.env.JWT_SECRET || "secret",
-      { expiresIn: "7d" }
-    );
-
-    res.json({
-      token,
-      name: user.name,
-      role: user.role
-    });
-
-  } catch (err) {
-    console.error("Login Error:", err);
-    res.status(500).json({ error: "Server error" });
-  }
+// Limit OTP requests: max 3 every 10 minutes per IP
+const requestOtpLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 3,
+  message: { error: "Too many OTP requests. Please try again later." },
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
-// ------------------------
-// REGISTER (FOR DEVELOPMENT ONLY)
-// Remove later to prevent abuse
-// ------------------------
-router.post("/register", async (req, res) => {
-  try {
-    const { name, username, password, role } = req.body;
-
-    const exists = await User.findOne({ username });
-    if (exists) return res.status(400).json({ error: "User already exists" });
-
-    const hashed = await bcrypt.hash(password, 10);
-
-    const user = await User.create({
-      name,
-      username,
-      password: hashed,
-      role
-    });
-
-    res.json({ message: "User created", user });
-
-  } catch (err) {
-    console.error("Register Error:", err);
-    res.status(500).json({ error: "Server error" });
-  }
+// Limit OTP verification attempts: max 5 every 5 minutes per IP
+const verifyOtpLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 5,
+  message: { error: "Too many OTP attempts. Please try again later." },
+  standardHeaders: true,
+  legacyHeaders: false,
 });
+
+router.post("/register-student", registerStudent);
+router.post("/request-otp", requestOtpLimiter, requestOtp);
+router.post("/verify-otp", verifyOtpLimiter, verifyOtp);
 
 export default router;
