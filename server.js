@@ -14,7 +14,6 @@ import vrTestRoutes from "./routes/vrTestRoutes.js";
 import vrScoreRoutes from "./routes/vrScoreRoutes.js";
 import testInferenceRoute from "./routes/testInference.js";
 import telemetryRoutes from "./routes/telemetryRoutes.js";
-import { requireVerifiedSession } from "./middleware/authMiddleware.js";
 
 // SOCKETS
 import alertSocket from "./sockets/alertSocket.js";
