@@ -6,8 +6,12 @@ import {
   getSessionDetails,
   getStudentHistory,
 } from "../controllers/sessionController.js";
+import { requireVerifiedSession } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
+
+// 🔐 PROTECT ALL SESSION ROUTES
+router.use(requireVerifiedSession);
 
 // CREATE session
 router.post("/", createSession);

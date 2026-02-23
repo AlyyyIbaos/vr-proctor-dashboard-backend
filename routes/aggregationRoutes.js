@@ -1,7 +1,11 @@
 import express from "express";
 import supabase from "../config/supabaseClient.js";
+import { requireVerifiedSession } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
+
+// 🔐 Require verified session for all routes
+router.use(requireVerifiedSession);
 
 // ===============================
 // STUDENT BEHAVIORAL REPORT
@@ -9,13 +13,45 @@ const router = express.Router();
 router.get("/:id/behavioral-report", async (req, res) => {
   try {
     const { id } = req.params;
+    const { user_id, role } = req.auth;
 
+    // ===============================
+    // 🔒 OWNERSHIP VALIDATION
+    // ===============================
+    const { data: session, error: sessionError } = await supabase
+      .from("sessions")
+      .select("id, examinee_id")
+      .eq("id", id)
+      .single();
+
+    if (sessionError || !session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    // If student → ensure session belongs to them
+    if (role === "student") {
+      const { data: examinee } = await supabase
+        .from("examinees")
+        .select("id")
+        .eq("user_id", user_id)
+        .single();
+
+      if (!examinee || examinee.id !== session.examinee_id) {
+        return res.status(403).json({
+          error: "Access denied: not your session",
+        });
+      }
+    }
+
+    // ===============================
+    // FETCH INFERENCE LOGS
+    // ===============================
     const { data: logs, error } = await supabase
       .from("inference_logs")
       .select("*")
       .eq("session_id", id)
       .order("question_index", { ascending: true })
-      .order("window_index", { ascending: true }); // important for clean ordering
+      .order("window_index", { ascending: true });
 
     if (error) {
       console.error(error);
