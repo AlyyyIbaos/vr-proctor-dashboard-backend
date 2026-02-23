@@ -76,7 +76,7 @@ router.get("/current", requireVerifiedSession, async (req, res) => {
       .from("sessions")
       .select("*, exams(*)")
       .eq("examinee_id", studentId)
-      .eq("status", "active")
+      .eq("status", "live")
       .order("started_at", { ascending: false })
       .limit(1)
       .single();
