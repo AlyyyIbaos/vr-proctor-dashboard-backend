@@ -245,63 +245,108 @@ export const getDashboardSummary = async (req, res) => {
  * GET single session details with cheating logs
  */
 export const getSessionDetails = async (req, res) => {
-  const { id } = req.params;
+  try {
+    const { id } = req.params;
+    const { user_id, role } = req.auth;
 
-  const { data, error } = await supabase
-    .from("sessions")
-    .select(
-      `
-      id,
-      status,
-      risk_level,
-      score,
-      max_score,
-      started_at,
-      ended_at,
-      final_label,
-      final_reason,
-      final_confidence,
-      decision_at,
-      exams (
-        title
-      ),
-      examinees (
-        full_name
-      ),
-      cheating_logs (
+    // ===============================
+    // FETCH SESSION BASIC INFO
+    // ===============================
+    const { data: session, error: sessionError } = await supabase
+      .from("sessions")
+      .select(
+        `
+        id,
+        status,
+        risk_level,
+        score,
+        max_score,
+        started_at,
+        ended_at,
+        final_label,
+        final_reason,
+        final_confidence,
+        decision_at,
+        exam_id,
+        examinee_id,
+        exams (
+          title
+        ),
+        examinees (
+          id,
+          full_name,
+          user_id
+        )
+        `,
+      )
+      .eq("id", id)
+      .single();
+
+    if (sessionError || !session) {
+      return res.status(404).json({
+        error: "Session not found",
+      });
+    }
+
+    // ===============================
+    // 🔒 OWNERSHIP VALIDATION
+    // ===============================
+    if (role === "student") {
+      if (session.examinees.user_id !== user_id) {
+        return res.status(403).json({
+          error: "Access denied: not your session",
+        });
+      }
+    }
+
+    // ===============================
+    // FETCH CHEATING LOGS
+    // ===============================
+    const { data: logs, error: logsError } = await supabase
+      .from("cheating_logs")
+      .select(
+        `
         id,
         event_type,
         confidence_level,
         severity,
         detected_at,
         details
+        `,
       )
-    `,
-    )
-    .eq("id", id)
-    .single();
+      .eq("session_id", id)
+      .order("detected_at", { ascending: false });
 
-  if (error || !data) {
-    console.error(error);
-    return res.status(404).json({
-      error: "Session not found",
+    if (logsError) {
+      console.error(logsError);
+      return res.status(500).json({
+        error: "Failed to fetch cheating logs",
+      });
+    }
+
+    // ===============================
+    // RETURN SECURED RESPONSE
+    // ===============================
+    res.json({
+      id: session.id,
+      status: session.status,
+      risk_level: session.risk_level,
+      score: session.score,
+      max_score: session.max_score,
+      started_at: session.started_at,
+      ended_at: session.ended_at,
+      final_label: session.final_label,
+      final_reason: session.final_reason,
+      final_confidence: session.final_confidence,
+      decision_at: session.decision_at,
+      exam_title: session.exams?.title ?? "Exam",
+      examinee_name: session.examinees?.full_name ?? "Examinee",
+      alerts: logs ?? [],
+    });
+  } catch (err) {
+    console.error("GET SESSION DETAILS ERROR:", err);
+    res.status(500).json({
+      error: "Server error",
     });
   }
-
-  res.json({
-    id: data.id,
-    status: data.status,
-    risk_level: data.risk_level,
-    score: data.score,
-    max_score: data.max_score,
-    started_at: data.started_at,
-    ended_at: data.ended_at,
-    final_label: data.final_label,
-    final_reason: data.final_reason,
-    final_confidence: data.final_confidence,
-    decision_at: data.decision_at,
-    exam_title: data.exams?.title ?? "Exam",
-    examinee_name: data.examinees?.full_name ?? "Examinee",
-    alerts: data.cheating_logs ?? [],
-  });
 };
