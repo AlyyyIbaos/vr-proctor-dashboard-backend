@@ -16,14 +16,12 @@ export const createSession = async (req, res) => {
 
     const { user_id, role } = req.auth;
 
-    // Only students can create exam sessions
     if (role !== "student") {
       return res.status(403).json({
         error: "Only students can create exam sessions",
       });
     }
 
-    // Get examinee profile from authenticated user
     const { data: examinee, error: examineeError } = await supabase
       .from("examinees")
       .select("id")
@@ -36,7 +34,6 @@ export const createSession = async (req, res) => {
       });
     }
 
-    // Prevent duplicate active session for same exam
     const { data: existingSession } = await supabase
       .from("sessions")
       .select("id")
@@ -51,7 +48,6 @@ export const createSession = async (req, res) => {
       });
     }
 
-    // Create session
     const { data: session, error } = await supabase
       .from("sessions")
       .insert([
@@ -86,7 +82,6 @@ export const createSession = async (req, res) => {
 
 /**
  * GET all active exam sessions
- * Used in: LiveExamsPage
  */
 export const getActiveSessions = async (req, res) => {
   try {
@@ -113,7 +108,6 @@ export const getActiveSessions = async (req, res) => {
       )
       .eq("status", "active");
 
-    // If student → filter to own sessions only
     if (role === "student") {
       const { data: examinee } = await supabase
         .from("examinees")
@@ -149,8 +143,83 @@ export const getActiveSessions = async (req, res) => {
 };
 
 /**
+ * 🆕 GET STUDENT SESSION HISTORY
+ * Returns active + completed + flagged sessions
+ */
+export const getStudentHistory = async (req, res) => {
+  try {
+    const { user_id, role } = req.auth;
+
+    if (role !== "student") {
+      return res.status(403).json({
+        error: "Access denied",
+      });
+    }
+
+    const { data: examinee, error: examineeError } = await supabase
+      .from("examinees")
+      .select("id")
+      .eq("user_id", user_id)
+      .single();
+
+    if (examineeError || !examinee) {
+      return res.status(404).json({
+        error: "Examinee profile not found",
+      });
+    }
+
+    const { data, error } = await supabase
+      .from("sessions")
+      .select(
+        `
+        id,
+        status,
+        risk_level,
+        score,
+        max_score,
+        started_at,
+        ended_at,
+        final_label,
+        final_confidence,
+        exams (
+          title
+        )
+      `,
+      )
+      .eq("examinee_id", examinee.id)
+      .order("started_at", { ascending: false });
+
+    if (error) {
+      console.error(error);
+      return res.status(500).json({
+        error: "Failed to fetch student sessions",
+      });
+    }
+
+    const normalized = (data || []).map((s) => ({
+      id: s.id,
+      exam_title: s.exams?.title ?? "Exam",
+      status: s.status,
+      risk_level: s.risk_level,
+      score: s.score,
+      max_score: s.max_score,
+      started_at: s.started_at,
+      ended_at: s.ended_at,
+      final_label: s.final_label,
+      final_confidence: s.final_confidence,
+    }));
+
+    res.json(normalized);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      error: "Server error",
+    });
+  }
+};
+
+/**
  * GET dashboard summary
- * Used in: DashboardPage
  */
 export const getDashboardSummary = async (req, res) => {
   const { data, error } = await supabase.from("sessions").select("risk_level");
@@ -164,9 +233,9 @@ export const getDashboardSummary = async (req, res) => {
 
   const summary = {
     total: data.length,
-    low: data.filter((s) => s.risk_level === "Low").length,
-    medium: data.filter((s) => s.risk_level === "Medium").length,
-    high: data.filter((s) => s.risk_level === "High").length,
+    low: data.filter((s) => s.risk_level === "low").length,
+    medium: data.filter((s) => s.risk_level === "medium").length,
+    high: data.filter((s) => s.risk_level === "high").length,
   };
 
   res.json(summary);
@@ -174,7 +243,6 @@ export const getDashboardSummary = async (req, res) => {
 
 /**
  * GET single session details with cheating logs
- * Used in: ExamineePage
  */
 export const getSessionDetails = async (req, res) => {
   const { id } = req.params;
