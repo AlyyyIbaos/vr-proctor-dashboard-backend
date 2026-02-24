@@ -36,13 +36,12 @@ router.post("/start", requireVerifiedSession, async (req, res) => {
       .single();
 
     if (examineeError || !examinee) {
-      console.error("EXAMINEE NOT FOUND:", examineeError);
       return res.status(400).json({
         error: "Examinee profile not found",
       });
     }
 
-    // 3️⃣ Create session using examinee.id
+    // 3️⃣ Create session
     const { data: session, error: sessionError } = await supabase
       .from("sessions")
       .insert([
@@ -61,7 +60,6 @@ router.post("/start", requireVerifiedSession, async (req, res) => {
       .single();
 
     if (sessionError) {
-      console.error("SESSION INSERT ERROR:", sessionError);
       return res.status(500).json({
         error: "Failed to create session",
       });
@@ -86,7 +84,6 @@ router.get("/current", requireVerifiedSession, async (req, res) => {
   try {
     const userId = req.auth.user_id;
 
-    // Find examinee first
     const { data: examinee } = await supabase
       .from("examinees")
       .select("id")
@@ -104,17 +101,69 @@ router.get("/current", requireVerifiedSession, async (req, res) => {
       .eq("status", "active")
       .order("started_at", { ascending: false })
       .limit(1)
-      .single();
+      .maybeSingle();
 
-    if (error || !session) {
-      return res.json(null);
+    if (error) {
+      return res.status(500).json({
+        error: "Failed to fetch current session",
+      });
     }
 
-    return res.json(session);
+    return res.json(session || null);
   } catch (err) {
     console.error("GET CURRENT SESSION ERROR:", err);
     return res.status(500).json({
-      error: "Failed to fetch current session",
+      error: "Server error",
+    });
+  }
+});
+
+/*
+==================================================
+GET STUDENT SESSION HISTORY
+GET /api/sessions/student/history
+==================================================
+*/
+router.get("/student/history", requireVerifiedSession, async (req, res) => {
+  try {
+    const userId = req.auth.user_id;
+
+    const { data: examinee } = await supabase
+      .from("examinees")
+      .select("id")
+      .eq("user_id", userId)
+      .single();
+
+    if (!examinee) {
+      return res.json([]);
+    }
+
+    const { data, error } = await supabase
+      .from("sessions")
+      .select("id, status, score, max_score, final_label, exams(title)")
+      .eq("examinee_id", examinee.id)
+      .order("started_at", { ascending: false });
+
+    if (error) {
+      return res.status(500).json({
+        error: "Failed to fetch history",
+      });
+    }
+
+    const formatted = data.map((s) => ({
+      id: s.id,
+      exam_title: s.exams?.title,
+      status: s.status,
+      score: s.score,
+      max_score: s.max_score,
+      final_label: s.final_label,
+    }));
+
+    return res.json(formatted);
+  } catch (err) {
+    console.error("HISTORY ERROR:", err);
+    return res.status(500).json({
+      error: "Server error",
     });
   }
 });

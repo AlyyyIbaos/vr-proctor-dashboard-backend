@@ -23,17 +23,20 @@ const app = express();
 
 /*
 ===========================================
-CORS CONFIG (FIXED - EXPRESS SAFE)
+IMPORTANT: TRUST PROXY (RENDER FIX)
+Fixes express-rate-limit X-Forwarded-For error
 ===========================================
 */
-const allowedOrigins = [
-  "http://localhost:3000",
-  "https://vr-proctor-dashboard-frontend-d60z81vk5-alyyyibaos-projects.vercel.app",
-];
+app.set("trust proxy", 1);
 
+/*
+===========================================
+CORS CONFIG (STABLE FOR RENDER + VERCEL)
+===========================================
+*/
 app.use(
   cors({
-    origin: true, // reflect request origin automatically
+    origin: true, // reflect origin automatically
     credentials: true,
   }),
 );
@@ -48,8 +51,7 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins,
-    methods: ["GET", "POST"],
+    origin: true,
     credentials: true,
   },
 });
