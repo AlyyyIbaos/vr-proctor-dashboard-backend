@@ -28,7 +28,7 @@ router.post("/start", requireVerifiedSession, async (req, res) => {
       });
     }
 
-    // 2️⃣ Find examinee record for this user
+    // 2️⃣ Find examinee record
     const { data: examinee, error: examineeError } = await supabase
       .from("examinees")
       .select("id")
@@ -167,5 +167,101 @@ router.get("/student/history", requireVerifiedSession, async (req, res) => {
     });
   }
 });
+
+/*
+==================================================
+GET SESSION BY ID
+GET /api/sessions/:sessionId
+==================================================
+*/
+router.get("/:sessionId", requireVerifiedSession, async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const userId = req.auth.user_id;
+
+    // Get examinee ID
+    const { data: examinee } = await supabase
+      .from("examinees")
+      .select("id")
+      .eq("user_id", userId)
+      .single();
+
+    if (!examinee) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    const { data, error } = await supabase
+      .from("sessions")
+      .select("*, exams(*)")
+      .eq("id", sessionId)
+      .eq("examinee_id", examinee.id) // 🔒 ensure ownership
+      .single();
+
+    if (error || !data) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    return res.json(data);
+  } catch (err) {
+    console.error("GET SESSION BY ID ERROR:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+/*
+==================================================
+GET BEHAVIORAL REPORT
+GET /api/sessions/:sessionId/behavioral-report
+==================================================
+*/
+router.get(
+  "/:sessionId/behavioral-report",
+  requireVerifiedSession,
+  async (req, res) => {
+    try {
+      const { sessionId } = req.params;
+      const userId = req.auth.user_id;
+
+      // Verify ownership first
+      const { data: examinee } = await supabase
+        .from("examinees")
+        .select("id")
+        .eq("user_id", userId)
+        .single();
+
+      if (!examinee) {
+        return res.status(403).json({ error: "Unauthorized" });
+      }
+
+      const { data: session } = await supabase
+        .from("sessions")
+        .select("id")
+        .eq("id", sessionId)
+        .eq("examinee_id", examinee.id)
+        .single();
+
+      if (!session) {
+        return res.status(404).json({ error: "Session not found" });
+      }
+
+      const { data, error } = await supabase
+        .from("detections")
+        .select("*")
+        .eq("session_id", sessionId)
+        .order("created_at", { ascending: true });
+
+      if (error) {
+        return res.status(500).json({
+          error: "Failed to fetch report",
+        });
+      }
+
+      return res.json(data || []);
+    } catch (err) {
+      console.error("BEHAVIORAL REPORT ERROR:", err);
+      return res.status(500).json({ error: "Server error" });
+    }
+  },
+);
 
 export default router;
