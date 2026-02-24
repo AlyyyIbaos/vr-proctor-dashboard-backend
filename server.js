@@ -23,12 +23,38 @@ import alertSocket from "./sockets/alertSocket.js";
 // APP SETUP
 // ==============================
 const app = express();
+
+/*
+===========================================
+🔥 FIXED CORS CONFIGURATION
+===========================================
+*/
+const allowedOrigins = [
+  "http://localhost:3000",
+  "https://vr-proctor-dashboard-frontend-d60z81vk5-alyyyibaos-projects.vercel.app",
+];
+
 app.use(
   cors({
-    origin: true,
+    origin: function (origin, callback) {
+      // Allow requests with no origin (like Postman)
+      if (!origin) return callback(null, true);
+
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   }),
 );
+
+// Handle preflight requests explicitly
+app.options("*", cors());
+
 app.use(express.json());
 app.use(morgan("dev"));
 
@@ -38,14 +64,20 @@ app.use(morgan("dev"));
 const server = http.createServer(app);
 
 const io = new Server(server, {
-  cors: { origin: "*" },
+  cors: {
+    origin: allowedOrigins,
+    methods: ["GET", "POST"],
+    credentials: true,
+  },
 });
+
 console.log("✅ Socket.IO initialized");
 
 // ==============================
 // API ROUTES
 // ==============================
 app.set("io", io);
+
 app.use("/api/auth", authRoutes);
 app.use("/api/sessions", sessionRoutes);
 app.use("/api/detections", detectionRoutes);
