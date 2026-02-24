@@ -109,5 +109,23 @@ router.get(
     }
   },
 );
+// ==============================
+// DEBUG: CHECK INFERENCE LOG COUNT
+// ==============================
+router.get("/debug/inference-count", async (req, res) => {
+  try {
+    const { data, error } = await supabase.from("inference_logs").select("*");
 
+    if (error) {
+      return res.status(500).json({ error });
+    }
+
+    return res.json({
+      count: data.length,
+      sample: data.slice(0, 3), // show first 3 rows
+    });
+  } catch (err) {
+    return res.status(500).json({ error: "Debug failed" });
+  }
+});
 export default router;
