@@ -1,9 +1,10 @@
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import supabase from "../config/supabaseClient.js";
+import { sendOTPEmail } from "../utils/mailer.js";
 
 const OTP_MAX_ATTEMPTS = 5;
-const LOCK_DURATION_MINUTES = 10;
+const LOCK_DURATION_MINUTES = 1;
 const RESEND_COOLDOWN_SECONDS = 60;
 
 /**
@@ -126,7 +127,8 @@ export async function requestOtp(req, res) {
       attempt_count: 0,
     });
 
-    console.log(`[DEV OTP] ${email}: ${otp}`);
+    // 🔥 SEND REAL EMAIL
+    await sendOTPEmail(email, otp);
 
     return res.json({ message: "OTP sent to email" });
   } catch (err) {
@@ -175,7 +177,6 @@ export async function verifyOtp(req, res) {
         .json({ error: "No active authentication session" });
     }
 
-    // 🔒 Check lock status
     if (
       authSession.locked_until &&
       new Date(authSession.locked_until) > new Date()
@@ -195,7 +196,6 @@ export async function verifyOtp(req, res) {
       return res.status(400).json({ error: "OTP session not found" });
     }
 
-    // ❌ Wrong OTP
     if (
       otpSession.otp_hash !== otpHash ||
       new Date(otpSession.expires_at) < new Date()
@@ -221,14 +221,13 @@ export async function verifyOtp(req, res) {
           .eq("id", authSession.id);
 
         return res.status(403).json({
-          error: "Too many failed attempts. Account locked for 10 minutes.",
+          error: "Too many failed attempts. Account locked temporarily.",
         });
       }
 
       return res.status(400).json({ error: "Invalid or expired OTP" });
     }
 
-    // ✅ Success
     await supabase
       .from("auth_sessions")
       .update({

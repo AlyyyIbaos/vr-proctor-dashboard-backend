@@ -14,29 +14,23 @@ export default function telemetryRoutes(io) {
 
   /*
   ==================================================
-  VR TELEMETRY WITH SESSION TOKEN VALIDATION
+  VR TELEMETRY (SIMPLIFIED — NO VR TOKEN)
   ==================================================
   */
   router.post("/telemetry", async (req, res) => {
     try {
-      const {
-        session_id,
-        vr_session_token,
-        question_index,
-        window_index,
-        window,
-      } = req.body;
+      const { session_id, question_index, window_index, window } = req.body;
 
-      if (!session_id || !vr_session_token || !window) {
+      if (!session_id || !window) {
         return res.status(400).json({ error: "Invalid telemetry payload" });
       }
 
       // =========================
-      // VALIDATE SESSION + TOKEN
+      // VALIDATE SESSION ONLY
       // =========================
       const { data: session, error: sessionError } = await supabase
         .from("sessions")
-        .select("vr_session_token, vr_token_expires_at, status")
+        .select("status")
         .eq("id", session_id)
         .single();
 
@@ -46,17 +40,6 @@ export default function telemetryRoutes(io) {
 
       if (session.status !== "active") {
         return res.status(403).json({ error: "Session not active" });
-      }
-
-      if (session.vr_session_token !== vr_session_token) {
-        return res.status(401).json({ error: "Invalid VR token" });
-      }
-
-      if (
-        session.vr_token_expires_at &&
-        new Date(session.vr_token_expires_at) < new Date()
-      ) {
-        return res.status(401).json({ error: "VR token expired" });
       }
 
       // =========================
