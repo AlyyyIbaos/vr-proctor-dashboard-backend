@@ -19,14 +19,11 @@ import aggregationRoutes from "./routes/aggregationRoutes.js";
 // SOCKETS
 import alertSocket from "./sockets/alertSocket.js";
 
-// ==============================
-// APP SETUP
-// ==============================
 const app = express();
 
 /*
 ===========================================
-🔥 FIXED CORS CONFIGURATION
+CORS CONFIG (FIXED - EXPRESS SAFE)
 ===========================================
 */
 const allowedOrigins = [
@@ -37,8 +34,7 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: function (origin, callback) {
-      // Allow requests with no origin (like Postman)
-      if (!origin) return callback(null, true);
+      if (!origin) return callback(null, true); // allow Postman
 
       if (allowedOrigins.includes(origin)) {
         callback(null, true);
@@ -47,13 +43,8 @@ app.use(
       }
     },
     credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
   }),
 );
-
-// Handle preflight requests explicitly
-app.options("*", cors());
 
 app.use(express.json());
 app.use(morgan("dev"));
