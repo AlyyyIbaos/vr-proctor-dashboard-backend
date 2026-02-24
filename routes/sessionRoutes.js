@@ -1,6 +1,7 @@
 import express from "express";
 import supabase from "../config/supabaseClient.js";
 import { requireVerifiedSession } from "../middleware/authMiddleware.js";
+import crypto from "crypto";
 
 const router = express.Router();
 
@@ -28,7 +29,7 @@ router.post("/start", requireVerifiedSession, async (req, res) => {
       });
     }
 
-    // 2️⃣ Find examinee record
+    // 2️⃣ Find examinee
     const { data: examinee, error: examineeError } = await supabase
       .from("examinees")
       .select("id")
@@ -41,7 +42,11 @@ router.post("/start", requireVerifiedSession, async (req, res) => {
       });
     }
 
-    // 3️⃣ Create session
+    // 3️⃣ Generate VR session token
+    const vrToken = crypto.randomBytes(32).toString("hex");
+    const expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000); // 2 hours
+
+    // 4️⃣ Create session
     const { data: session, error: sessionError } = await supabase
       .from("sessions")
       .insert([
@@ -54,18 +59,25 @@ router.post("/start", requireVerifiedSession, async (req, res) => {
           max_score: 0,
           passed: false,
           started_at: new Date().toISOString(),
+          vr_session_token: vrToken,
+          vr_token_expires_at: expiresAt,
         },
       ])
       .select("*, exams(*)")
       .single();
 
     if (sessionError) {
+      console.error(sessionError);
       return res.status(500).json({
         error: "Failed to create session",
       });
     }
 
-    return res.json(session);
+    // Return session + token to dashboard
+    return res.json({
+      ...session,
+      vr_session_token: vrToken,
+    });
   } catch (err) {
     console.error("START SESSION ERROR:", err);
     return res.status(500).json({
@@ -73,195 +85,5 @@ router.post("/start", requireVerifiedSession, async (req, res) => {
     });
   }
 });
-
-/*
-==================================================
-GET CURRENT ACTIVE SESSION
-GET /api/sessions/current
-==================================================
-*/
-router.get("/current", requireVerifiedSession, async (req, res) => {
-  try {
-    const userId = req.auth.user_id;
-
-    const { data: examinee } = await supabase
-      .from("examinees")
-      .select("id")
-      .eq("user_id", userId)
-      .single();
-
-    if (!examinee) {
-      return res.json(null);
-    }
-
-    const { data: session, error } = await supabase
-      .from("sessions")
-      .select("*, exams(*)")
-      .eq("examinee_id", examinee.id)
-      .eq("status", "active")
-      .order("started_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (error) {
-      return res.status(500).json({
-        error: "Failed to fetch current session",
-      });
-    }
-
-    return res.json(session || null);
-  } catch (err) {
-    console.error("GET CURRENT SESSION ERROR:", err);
-    return res.status(500).json({
-      error: "Server error",
-    });
-  }
-});
-
-/*
-==================================================
-GET STUDENT SESSION HISTORY
-GET /api/sessions/student/history
-==================================================
-*/
-router.get("/student/history", requireVerifiedSession, async (req, res) => {
-  try {
-    const userId = req.auth.user_id;
-
-    const { data: examinee } = await supabase
-      .from("examinees")
-      .select("id")
-      .eq("user_id", userId)
-      .single();
-
-    if (!examinee) {
-      return res.json([]);
-    }
-
-    const { data, error } = await supabase
-      .from("sessions")
-      .select("id, status, score, max_score, final_label, exams(title)")
-      .eq("examinee_id", examinee.id)
-      .order("started_at", { ascending: false });
-
-    if (error) {
-      return res.status(500).json({
-        error: "Failed to fetch history",
-      });
-    }
-
-    const formatted = data.map((s) => ({
-      id: s.id,
-      exam_title: s.exams?.title,
-      status: s.status,
-      score: s.score,
-      max_score: s.max_score,
-      final_label: s.final_label,
-    }));
-
-    return res.json(formatted);
-  } catch (err) {
-    console.error("HISTORY ERROR:", err);
-    return res.status(500).json({
-      error: "Server error",
-    });
-  }
-});
-
-/*
-==================================================
-GET SESSION BY ID
-GET /api/sessions/:sessionId
-==================================================
-*/
-router.get("/:sessionId", requireVerifiedSession, async (req, res) => {
-  try {
-    const { sessionId } = req.params;
-    const userId = req.auth.user_id;
-
-    // Get examinee ID
-    const { data: examinee } = await supabase
-      .from("examinees")
-      .select("id")
-      .eq("user_id", userId)
-      .single();
-
-    if (!examinee) {
-      return res.status(403).json({ error: "Unauthorized" });
-    }
-
-    const { data, error } = await supabase
-      .from("sessions")
-      .select("*, exams(*)")
-      .eq("id", sessionId)
-      .eq("examinee_id", examinee.id) // 🔒 ensure ownership
-      .single();
-
-    if (error || !data) {
-      return res.status(404).json({ error: "Session not found" });
-    }
-
-    return res.json(data);
-  } catch (err) {
-    console.error("GET SESSION BY ID ERROR:", err);
-    return res.status(500).json({ error: "Server error" });
-  }
-});
-
-/*
-==================================================
-GET BEHAVIORAL REPORT
-GET /api/sessions/:sessionId/behavioral-report
-==================================================
-*/
-router.get(
-  "/:sessionId/behavioral-report",
-  requireVerifiedSession,
-  async (req, res) => {
-    try {
-      const { sessionId } = req.params;
-      const userId = req.auth.user_id;
-
-      // Verify ownership first
-      const { data: examinee } = await supabase
-        .from("examinees")
-        .select("id")
-        .eq("user_id", userId)
-        .single();
-
-      if (!examinee) {
-        return res.status(403).json({ error: "Unauthorized" });
-      }
-
-      const { data: session } = await supabase
-        .from("sessions")
-        .select("id")
-        .eq("id", sessionId)
-        .eq("examinee_id", examinee.id)
-        .single();
-
-      if (!session) {
-        return res.status(404).json({ error: "Session not found" });
-      }
-
-      const { data, error } = await supabase
-        .from("detections")
-        .select("*")
-        .eq("session_id", sessionId)
-        .order("created_at", { ascending: true });
-
-      if (error) {
-        return res.status(500).json({
-          error: "Failed to fetch report",
-        });
-      }
-
-      return res.json(data || []);
-    } catch (err) {
-      console.error("BEHAVIORAL REPORT ERROR:", err);
-      return res.status(500).json({ error: "Server error" });
-    }
-  },
-);
 
 export default router;
