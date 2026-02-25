@@ -70,20 +70,26 @@ export default function telemetryRoutes(io) {
       // =========================
       // LOG WINDOW
       // =========================
-      await supabase.from("inference_logs").insert([
-        {
-          session_id,
-          question_index,
-          window_index,
-          prob_cheat,
-          pred_raw,
-          cat_active,
-          cat_transition,
-          decision_mode,
-          model_latency_ms,
-          total_latency_ms,
-        },
-      ]);
+      const { error: insertError } = await supabase
+        .from("inference_logs")
+        .insert([
+          {
+            session_id,
+            question_index,
+            window_index,
+            prob_cheat,
+            pred_raw,
+            cat_active,
+            cat_transition,
+            decision_mode,
+            model_latency_ms,
+            total_latency_ms,
+          },
+        ]);
+
+      if (insertError) {
+        console.error("❌ SUPABASE INSERT ERROR:", insertError);
+      }
 
       // =========================
       // ESCALATE RISK
@@ -98,13 +104,23 @@ export default function telemetryRoutes(io) {
       // =========================
       // LIVE EMIT
       // =========================
-      io.emit("live_status", {
+      const payload = {
         session_id,
         prob_cheat,
         pred_raw,
         cat_active,
         decision_mode,
         timestamp: new Date().toISOString(),
+      };
+
+      io.emit("live_status", payload);
+      io.to(session_id).emit("new_alert", {
+        session_id,
+        event_type: "AI Detection",
+        severity: cat_active === 1 ? "high" : "low",
+        confidence_level: prob_cheat,
+        details: `Probability: ${prob_cheat}`,
+        detected_at: new Date().toISOString(),
       });
 
       return res.json({
