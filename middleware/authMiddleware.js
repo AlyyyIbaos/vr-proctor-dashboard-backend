@@ -2,6 +2,12 @@ import jwt from "jsonwebtoken";
 import supabase from "../config/supabaseClient.js";
 
 const DEV_BYPASS_AUTH = process.env.DEV_BYPASS_AUTH === "true";
+const DEV_BYPASS_ROLE = process.env.DEV_BYPASS_ROLE || "student";
+
+// Log once on startup (cleaner logs)
+if (DEV_BYPASS_AUTH) {
+  console.warn("⚠️ DEV_BYPASS_AUTH ENABLED — Authentication is bypassed.");
+}
 
 export async function requireVerifiedSession(req, res, next) {
   try {
@@ -9,12 +15,10 @@ export async function requireVerifiedSession(req, res, next) {
     // 🚧 DEV MODE BYPASS
     // =========================
     if (DEV_BYPASS_AUTH) {
-      console.warn("⚠️ DEV_BYPASS_AUTH ENABLED");
-
-      // Fake auth context for testing
       req.auth = {
+        auth_session_id: "dev-auth-session",
         user_id: "dev-user",
-        role: "student",
+        role: DEV_BYPASS_ROLE,
       };
 
       return next();
