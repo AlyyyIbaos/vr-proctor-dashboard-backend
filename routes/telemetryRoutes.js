@@ -14,9 +14,10 @@ export default function telemetryRoutes(io) {
 
   /*
   ==================================================
-  VR TELEMETRY (SIMPLIFIED — NO VR TOKEN)
+  VR TELEMETRY
   ==================================================
   */
+
   router.post("/telemetry", async (req, res) => {
     try {
       const { session_id, question_index, window_index, window } = req.body;
@@ -26,7 +27,7 @@ export default function telemetryRoutes(io) {
       }
 
       // =========================
-      // VALIDATE SESSION ONLY
+      // VALIDATE SESSION
       // =========================
       const { data: session, error: sessionError } = await supabase
         .from("sessions")
@@ -43,13 +44,28 @@ export default function telemetryRoutes(io) {
       }
 
       // =========================
-      // CALL FASTAPI INFERENCE
+      // NORMALIZE WINDOW SIZE
+      // =========================
+      let normalizedWindow = window;
+
+      if (Array.isArray(window) && window.length > 120) {
+        normalizedWindow = window.slice(0, 120);
+      }
+
+      if (Array.isArray(window) && window.length < 120) {
+        return res.status(400).json({
+          error: `window must have 120 rows (got ${window.length})`,
+        });
+      }
+
+      // =========================
+      // CALL AI INFERENCE
       // =========================
       const inferenceResponse = await axios.post(
         `${process.env.INFERENCE_SERVICE_URL}/infer_window`,
         {
           session_id,
-          window,
+          window: normalizedWindow,
         },
         { timeout: 120000 },
       );
@@ -70,29 +86,43 @@ export default function telemetryRoutes(io) {
       // =========================
       // LOG WINDOW
       // =========================
-      const { error: insertError } = await supabase
-        .from("inference_logs")
-        .insert([
-          {
-            session_id,
-            question_index,
-            window_index,
-            prob_cheat,
-            pred_raw,
-            cat_active,
-            cat_transition,
-            decision_mode,
-            model_latency_ms,
-            total_latency_ms,
-          },
-        ]);
-
-      if (insertError) {
-        console.error("❌ SUPABASE INSERT ERROR:", insertError);
-      }
+      await supabase.from("inference_logs").insert([
+        {
+          session_id,
+          question_index,
+          window_index,
+          prob_cheat,
+          pred_raw,
+          cat_active,
+          cat_transition,
+          decision_mode,
+          model_latency_ms,
+          total_latency_ms,
+        },
+      ]);
 
       // =========================
-      // ESCALATE RISK
+      // BEHAVIORAL EVENT INSERT
+      // =========================
+      const eventType =
+        cat_active === 1
+          ? "cheating"
+          : prob_cheat > 0.4
+            ? "suspicious"
+            : "normal";
+
+      await supabase.from("proctor_events").insert([
+        {
+          session_id,
+          event_type: eventType,
+          reason_code: "ai_behavior_detection",
+          confidence_score: prob_cheat,
+          risk_score: prob_cheat,
+        },
+      ]);
+
+      // =========================
+      // ESCALATE SESSION RISK
       // =========================
       if (cat_active === 1) {
         await supabase
@@ -102,24 +132,16 @@ export default function telemetryRoutes(io) {
       }
 
       // =========================
-      // LIVE EMIT
+      // SOCKET LIVE UPDATE
       // =========================
-      const payload = {
-        session_id,
-        prob_cheat,
-        pred_raw,
-        cat_active,
-        decision_mode,
-        timestamp: new Date().toISOString(),
-      };
-
-      io.emit("live_status", payload);
       io.to(session_id).emit("new_alert", {
         session_id,
-        event_type: "AI Detection",
-        severity: cat_active === 1 ? "high" : "low",
+        event_type: "behavioral",
+        severity:
+          cat_active === 1 ? "high" : prob_cheat > 0.4 ? "medium" : "low",
         confidence_level: prob_cheat,
-        details: `Probability: ${prob_cheat}`,
+        question_index,
+        details: "AI behavioral detection",
         detected_at: new Date().toISOString(),
       });
 
@@ -132,6 +154,7 @@ export default function telemetryRoutes(io) {
       });
     } catch (err) {
       console.error("💥 TELEMETRY ERROR:", err.response?.data || err.message);
+
       return res.status(500).json({
         error: "Telemetry processing failed",
       });
