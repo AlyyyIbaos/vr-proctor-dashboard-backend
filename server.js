@@ -68,9 +68,9 @@ app.use("/api/sessions", sessionRoutes);
 app.use("/api/detections", detectionRoutes);
 app.use("/api/exams", examRoutes);
 app.use("/api/vr", vrTestRoutes);
+app.use("/api/vr", telemetryRoutes(io));
 app.use("/api/vr", vrScoreRoutes);
 app.use("/api", testInferenceRoute);
-app.use("/api/vr", telemetryRoutes(io));
 app.use("/api/sessions", aggregationRoutes);
 
 // ==============================
