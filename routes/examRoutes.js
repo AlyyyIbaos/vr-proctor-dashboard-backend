@@ -1,6 +1,6 @@
 import express from "express";
 import { getLiveExams } from "../controllers/examController.js";
-import supabase from "../supabaseClient.js";
+import supabase from "../config/supabaseClient.js";
 
 const router = express.Router();
 
