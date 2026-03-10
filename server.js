@@ -15,6 +15,7 @@ import vrScoreRoutes from "./routes/vrScoreRoutes.js";
 import testInferenceRoute from "./routes/testInference.js";
 import telemetryRoutes from "./routes/telemetryRoutes.js";
 import aggregationRoutes from "./routes/aggregationRoutes.js";
+import startInferenceKeepAlive from "./keepAlive.js";
 
 // SOCKETS
 import alertSocket from "./sockets/alertSocket.js";
@@ -92,4 +93,5 @@ const PORT = process.env.PORT || 5000;
 
 server.listen(process.env.PORT || 5000, () => {
   console.log(`🚀 Server running on port ${process.env.PORT || 5000}`);
+  startInferenceKeepAlive();
 });

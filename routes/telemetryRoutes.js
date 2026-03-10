@@ -56,6 +56,11 @@ export default function telemetryRoutes(io) {
       =========================
       */
 
+      console.log(
+        "🚀 Calling inference:",
+        `${process.env.INFERENCE_SERVICE_URL}/infer_window`,
+      );
+
       const inferenceResponse = await axios.post(
         `${process.env.INFERENCE_SERVICE_URL}/infer_window`,
         {
@@ -63,6 +68,8 @@ export default function telemetryRoutes(io) {
           window: normalizedWindow,
         },
       );
+
+      console.log("🧠 Inference result:", inferenceResponse.data);
 
       const { prob_cheat, pred_raw, cat_active } = inferenceResponse.data;
 
@@ -101,7 +108,7 @@ export default function telemetryRoutes(io) {
 
       const detected_at = new Date().toISOString();
 
-      io.to(session_id).emit("new_alert", {
+      io.emit(session_id).emit("new_alert", {
         session_id,
         event_type: "behavioral",
         severity,
@@ -116,7 +123,7 @@ export default function telemetryRoutes(io) {
       =========================
       */
 
-      io.to(session_id).emit("live_status", {
+      io.emit(session_id).emit("live_status", {
         session_id,
         prob_cheat,
       });
