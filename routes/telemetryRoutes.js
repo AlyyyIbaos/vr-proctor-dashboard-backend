@@ -108,7 +108,7 @@ export default function telemetryRoutes(io) {
 
       const detected_at = new Date().toISOString();
 
-      io.emit(session_id).emit("new_alert", {
+      io.to(session_id).emit("new_alert", {
         session_id,
         event_type: "behavioral",
         severity,
@@ -123,7 +123,7 @@ export default function telemetryRoutes(io) {
       =========================
       */
 
-      io.emit(session_id).emit("live_status", {
+      io.to(session_id).emit("live_status", {
         session_id,
         prob_cheat,
       });
