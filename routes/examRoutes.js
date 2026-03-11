@@ -14,6 +14,66 @@ router.get("/live", getLiveExams);
 
 /*
 ==================================================
+CREATE EXAM
+POST /api/exams/admin
+==================================================
+*/
+
+router.post("/admin", async (req, res) => {
+  const { title, subject, duration_minutes } = req.body;
+
+  try {
+    const { data, error } = await supabase
+      .from("exams")
+      .insert([
+        {
+          title,
+          subject,
+          duration_minutes,
+          status: "scheduled",
+        },
+      ])
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to create exam" });
+  }
+});
+
+/*
+==================================================
+PUBLISH EXAM (READY FOR VR)
+PATCH /api/exams/admin/:examId/publish
+==================================================
+*/
+
+router.patch("/admin/:examId/publish", async (req, res) => {
+  const { examId } = req.params;
+
+  try {
+    const { data, error } = await supabase
+      .from("exams")
+      .update({ status: "live" })
+      .eq("id", examId)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to publish exam" });
+  }
+});
+
+/*
+==================================================
 ADD QUESTION TO AN EXAM
 ==================================================
 */
@@ -21,7 +81,8 @@ ADD QUESTION TO AN EXAM
 router.post("/admin/:examId/questions", async (req, res) => {
   const { examId } = req.params;
 
-  const { question_type, question_text, time_limit, choices } = req.body;
+  const { question_type, question_text, time_limit, correct_answer, choices } =
+    req.body;
 
   try {
     const { data: existing } = await supabase
@@ -42,6 +103,7 @@ router.post("/admin/:examId/questions", async (req, res) => {
           question_type,
           question_text,
           time_limit,
+          correct_answer,
         },
       ])
       .select()
@@ -67,6 +129,59 @@ router.post("/admin/:examId/questions", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to add question" });
+  }
+});
+
+/*
+==================================================
+DELETE QUESTION
+==================================================
+*/
+
+router.delete("/admin/questions/:questionId", async (req, res) => {
+  const { questionId } = req.params;
+
+  try {
+    await supabase.from("choices").delete().eq("question_id", questionId);
+
+    const { error } = await supabase
+      .from("questions")
+      .delete()
+      .eq("id", questionId);
+
+    if (error) throw error;
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to delete question" });
+  }
+});
+
+/*
+==================================================
+UPDATE QUESTION
+==================================================
+*/
+
+router.patch("/admin/questions/:questionId", async (req, res) => {
+  const { questionId } = req.params;
+  const { question_text } = req.body;
+
+  try {
+    const { data, error } = await supabase
+      .from("questions")
+      .update({ question_text })
+      .eq("id", questionId)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to update question" });
   }
 });
 
