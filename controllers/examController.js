@@ -5,7 +5,7 @@ export const getLiveExams = async (req, res) => {
     const { data: exams, error } = await supabase
       .from("exams")
       .select("id,title")
-      .eq("status", "live");
+      .eq("status", ["live", "scheduled"]);
 
     if (error) {
       console.error(error);
