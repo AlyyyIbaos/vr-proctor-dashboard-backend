@@ -7,7 +7,6 @@ const router = express.Router();
 /*
 ==================================================
 GET LIVE EXAMS FOR PROCTOR DASHBOARD
-GET /api/exams/live
 ==================================================
 */
 
@@ -16,33 +15,33 @@ router.get("/live", getLiveExams);
 /*
 ==================================================
 ADD QUESTION TO AN EXAM
-POST /api/exams/admin/:examId/questions
 ==================================================
 */
 
 router.post("/admin/:examId/questions", async (req, res) => {
   const { examId } = req.params;
 
-  const {
-    question_index,
-    question_type,
-    question_text,
-    time_limit,
-    correct_answer,
-    choices,
-  } = req.body;
+  const { question_type, question_text, time_limit, choices } = req.body;
 
   try {
+    const { data: existing } = await supabase
+      .from("questions")
+      .select("question_index")
+      .eq("exam_id", examId)
+      .order("question_index", { ascending: false })
+      .limit(1);
+
+    const nextIndex = existing?.length ? existing[0].question_index + 1 : 1;
+
     const { data: question, error } = await supabase
       .from("questions")
       .insert([
         {
           exam_id: examId,
-          question_index,
+          question_index: nextIndex,
           question_type,
           question_text,
           time_limit,
-          correct_answer,
         },
       ])
       .select()
@@ -74,7 +73,6 @@ router.post("/admin/:examId/questions", async (req, res) => {
 /*
 ==================================================
 VR FETCH EXAM + QUESTIONS
-GET /api/exams/:examId
 ==================================================
 */
 
