@@ -17,7 +17,7 @@ export async function requireVerifiedSession(req, res, next) {
     if (DEV_BYPASS_AUTH) {
       req.auth = {
         auth_session_id: "dev-auth-session",
-        user_id: "dev-user",
+        user_id: "11111111-1111-1111-1111-111111111111",
         role: DEV_BYPASS_ROLE,
       };
 

@@ -23,8 +23,14 @@ POST /api/exams/admin/:examId/questions
 router.post("/admin/:examId/questions", async (req, res) => {
   const { examId } = req.params;
 
-  const { question_index, question_type, question_text, time_limit, choices } =
-    req.body;
+  const {
+    question_index,
+    question_type,
+    question_text,
+    time_limit,
+    correct_answer,
+    choices,
+  } = req.body;
 
   try {
     const { data: question, error } = await supabase
@@ -36,6 +42,7 @@ router.post("/admin/:examId/questions", async (req, res) => {
           question_type,
           question_text,
           time_limit,
+          correct_answer,
         },
       ])
       .select()
@@ -43,7 +50,6 @@ router.post("/admin/:examId/questions", async (req, res) => {
 
     if (error) throw error;
 
-    // Insert choices (MCQ / TF)
     if (choices && choices.length > 0) {
       const choiceRows = choices.map((c) => ({
         question_id: question.id,
@@ -102,7 +108,7 @@ router.get("/:examId", async (req, res) => {
         type: q.question_type,
         text: q.question_text,
         time_limit: q.time_limit,
-        choices: choices.map((c) => ({
+        choices: (choices || []).map((c) => ({
           label: c.label,
           text: c.choice_text,
         })),

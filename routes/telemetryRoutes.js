@@ -71,8 +71,11 @@ export default function telemetryRoutes(io) {
 
       console.log("🧠 Inference result:", inferenceResponse.data);
 
-      const { prob_cheat, pred_raw, cat_active } = inferenceResponse.data;
+      const inferenceData = inferenceResponse.data || {};
 
+      const prob_cheat = inferenceData.prob_cheat ?? 0;
+      const pred_raw = inferenceData.pred_raw ?? 0;
+      const cat_active = inferenceData.cat_active ?? 0;
       /*
       =========================
       STORE INFERENCE LOG
@@ -123,9 +126,17 @@ export default function telemetryRoutes(io) {
       =========================
       */
 
+      const risk_label =
+        prob_cheat > 0.8
+          ? "cheating"
+          : prob_cheat > 0.5
+            ? "suspicious"
+            : "normal";
+
       io.to(session_id).emit("live_status", {
         session_id,
         prob_cheat,
+        risk_label,
       });
 
       return res.json({

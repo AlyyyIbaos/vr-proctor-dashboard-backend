@@ -15,6 +15,8 @@ import vrScoreRoutes from "./routes/vrScoreRoutes.js";
 import testInferenceRoute from "./routes/testInference.js";
 import telemetryRoutes from "./routes/telemetryRoutes.js";
 import aggregationRoutes from "./routes/aggregationRoutes.js";
+import vrSessionRoutes from "./routes/vrSessionRoutes.js";
+
 import startInferenceKeepAlive from "./keepAlive.js";
 
 // SOCKETS
@@ -25,19 +27,18 @@ const app = express();
 /*
 ===========================================
 IMPORTANT: TRUST PROXY (RENDER FIX)
-Fixes express-rate-limit X-Forwarded-For error
 ===========================================
 */
 app.set("trust proxy", 1);
 
 /*
 ===========================================
-CORS CONFIG (STABLE FOR RENDER + VERCEL)
+CORS CONFIG
 ===========================================
 */
 app.use(
   cors({
-    origin: true, // reflect origin automatically
+    origin: true,
     credentials: true,
   }),
 );
@@ -68,11 +69,18 @@ app.use("/api/auth", authRoutes);
 app.use("/api/sessions", sessionRoutes);
 app.use("/api/detections", detectionRoutes);
 app.use("/api/exams", examRoutes);
+
 app.use("/api/vr", vrTestRoutes);
+app.use("/api/vr", vrSessionRoutes);
 app.use("/api/vr", telemetryRoutes(io));
 app.use("/api/vr", vrScoreRoutes);
+
 app.use("/api", testInferenceRoute);
-app.use("/api/sessions", aggregationRoutes);
+
+/*
+FIXED ROUTE MOUNT
+*/
+app.use("/api/aggregation", aggregationRoutes);
 
 // ==============================
 // SOCKET.IO ALERTS
@@ -91,7 +99,7 @@ app.get("/", (req, res) => {
 // ==============================
 const PORT = process.env.PORT || 5000;
 
-server.listen(process.env.PORT || 5000, () => {
-  console.log(`🚀 Server running on port ${process.env.PORT || 5000}`);
+server.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
   startInferenceKeepAlive();
 });
