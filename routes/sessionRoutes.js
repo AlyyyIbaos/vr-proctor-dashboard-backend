@@ -6,48 +6,6 @@ import crypto from "crypto";
 const router = express.Router();
 
 /*
-==============================================
-SESSION CODE GENERATOR
-==============================================
-*/
-function generateSessionCode(length = 6) {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let code = "";
-
-  for (let i = 0; i < length; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-
-  return code;
-}
-
-/*
-==============================================
-GENERATE UNIQUE SESSION CODE
-==============================================
-*/
-async function generateUniqueSessionCode() {
-  let unique = false;
-  let code = null;
-
-  while (!unique) {
-    code = generateSessionCode();
-
-    const { data } = await supabase
-      .from("sessions")
-      .select("id")
-      .eq("session_code", code)
-      .maybeSingle();
-
-    if (!data) {
-      unique = true;
-    }
-  }
-
-  return code;
-}
-
-/*
 ==================================================
 START NEW SESSION
 POST /api/sessions/start
@@ -82,36 +40,8 @@ router.post("/start", requireVerifiedSession, async (req, res) => {
       });
     }
 
-    /*
-    ==============================================
-    CHECK IF ACTIVE SESSION ALREADY EXISTS
-    ==============================================
-    */
-
-    const { data: existingSession } = await supabase
-      .from("sessions")
-      .select("*")
-      .eq("examinee_id", examinee.id)
-      .eq("status", "active")
-      .maybeSingle();
-
-    if (existingSession) {
-      return res.json({
-        ...existingSession,
-        message: "Active session already exists",
-      });
-    }
-
-    /*
-    ==============================================
-    CREATE NEW SESSION
-    ==============================================
-    */
-
     const vrToken = crypto.randomBytes(32).toString("hex");
     const expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000);
-
-    const sessionCode = await generateUniqueSessionCode();
 
     const { data: session, error } = await supabase
       .from("sessions")
@@ -127,7 +57,6 @@ router.post("/start", requireVerifiedSession, async (req, res) => {
           started_at: new Date().toISOString(),
           vr_session_token: vrToken,
           vr_token_expires_at: expiresAt,
-          session_code: sessionCode,
         },
       ])
       .select("*, exams(*)")
@@ -140,25 +69,8 @@ router.post("/start", requireVerifiedSession, async (req, res) => {
       });
     }
 
-    /*
-    ==========================================
-    SOCKET.IO BROADCAST
-    ==========================================
-    */
-
-    const io = req.app.get("io");
-
-    if (io) {
-      io.emit("new_session_started", {
-        session_id: session.id,
-        session_code: sessionCode,
-        exam_id: exam.id,
-      });
-    }
-
     return res.json({
       ...session,
-      session_code: sessionCode,
       vr_session_token: vrToken,
     });
   } catch (err) {
@@ -192,7 +104,7 @@ router.get("/active", requireVerifiedSession, async (req, res) => {
       .select("*, exams(*)")
       .eq("examinee_id", examinee.id)
       .eq("status", "active")
-      .order("started_at", { ascending: false });
+      .order("created_at", { ascending: false });
 
     return res.json(sessions || []);
   } catch (err) {
@@ -224,7 +136,7 @@ router.get("/student/history", requireVerifiedSession, async (req, res) => {
       .select("*, exams(title)")
       .eq("examinee_id", examinee.id)
       .neq("status", "active")
-      .order("started_at", { ascending: false });
+      .order("created_at", { ascending: false });
 
     return res.json(
       (sessions || []).map((s) => ({
