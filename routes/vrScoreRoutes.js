@@ -106,11 +106,19 @@ VR → Backend: Submit Exam Score
     */
 
       let suspicious_questions = 0;
+      const question_summary = [];
 
-      Object.values(grouped).forEach((q) => {
-        if (q.flagged >= 3) {
+      Object.entries(grouped).forEach(([qIndex, q]) => {
+        const verdict = q.flagged >= 3 ? "suspicious" : "normal";
+
+        if (verdict === "suspicious") {
           suspicious_questions += 1;
         }
+
+        question_summary.push({
+          question_index: Number(qIndex),
+          verdict,
+        });
       });
 
       /*
@@ -121,7 +129,8 @@ VR → Backend: Submit Exam Score
 
       const final_verdict = suspicious_questions >= 2 ? "suspicious" : "normal";
 
-      const overall_probability = logs.length > 0 ? prob_sum / logs.length : 0;
+      const overall_probability =
+        logs && logs.length > 0 ? prob_sum / logs.length : 0;
 
       /*
     ======================================
@@ -151,12 +160,14 @@ VR → Backend: Submit Exam Score
         max_score,
         final_verdict,
         overall_probability,
+        question_summary,
       });
 
       console.log("🏁 SESSION FINALIZED:", {
         session_id,
         final_verdict,
         overall_probability,
+        question_summary,
       });
 
       return res.json({
@@ -165,6 +176,7 @@ VR → Backend: Submit Exam Score
         max_score,
         final_verdict,
         overall_probability,
+        question_summary,
       });
     } catch (err) {
       console.error("💥 VR SCORE ERROR:", err);
