@@ -144,7 +144,6 @@ VR → Backend: Submit Exam Score
           final_label: final_verdict,
           final_confidence: overall_probability,
           decision_at: new Date().toISOString(),
-          status: final_verdict === "suspicious" ? "flagged" : "completed",
         })
         .eq("id", session_id);
 
