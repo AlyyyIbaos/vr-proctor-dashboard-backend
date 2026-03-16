@@ -73,7 +73,7 @@ app.use("/api/exams", examRoutes);
 app.use("/api/vr", vrTestRoutes);
 app.use("/api/vr", vrSessionRoutes);
 app.use("/api/vr", telemetryRoutes(io));
-app.use("/api/vr", vrScoreRoutes);
+app.use("/api/vr", vrScoreRoutes(io));
 
 app.use("/api", testInferenceRoute);
 
