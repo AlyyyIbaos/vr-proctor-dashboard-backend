@@ -13,6 +13,7 @@ VR sends a short session_code like:
   "session_code": "F8K2P9"
 }
 
+
 Backend returns the real session_id.
 */
 router.post("/session/validate", async (req, res) => {
