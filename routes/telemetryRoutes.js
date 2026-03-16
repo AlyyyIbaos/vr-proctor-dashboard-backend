@@ -36,8 +36,8 @@ export default function telemetryRoutes(io) {
         return res.status(401).json({ error: "Invalid session" });
       }
 
-      if (session.status !== "active") {
-        return res.status(403).json({ error: "Session not active" });
+      if (!["active", "completed", "flagged"].includes(session.status)) {
+        return res.status(403).json({ error: "Session not allowed" });
       }
 
       let normalizedWindow = window;
