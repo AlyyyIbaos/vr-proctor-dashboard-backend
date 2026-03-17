@@ -26,7 +26,6 @@ export default function vrScoreRoutes(io) {
         .update({
           score,
           max_score,
-          status: "completed",
           ended_at: submitted_at || new Date().toISOString(),
         })
         .eq("id", session_id);
