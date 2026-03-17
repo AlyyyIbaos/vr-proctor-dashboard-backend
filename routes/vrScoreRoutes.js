@@ -78,9 +78,11 @@ export default function vrScoreRoutes(io) {
       let suspiciousQuestions = 0;
 
       for (const q in questionMap) {
-        const { suspicious } = questionMap[q];
+        const { suspicious, total } = questionMap[q];
 
-        const verdict = suspicious >= 3 ? "suspicious" : "normal";
+        const ratio = total > 0 ? suspicious / total : 0;
+
+        const verdict = ratio >= 0.4 ? "suspicious" : "normal";
 
         if (verdict === "suspicious") {
           suspiciousQuestions += 1;
@@ -89,6 +91,9 @@ export default function vrScoreRoutes(io) {
         questionSummary.push({
           question: Number(q),
           verdict,
+          suspicious_count: suspicious, // 🔥 optional (for explainability)
+          total_windows: total,
+          ratio: Number(ratio.toFixed(2)),
         });
       }
 
