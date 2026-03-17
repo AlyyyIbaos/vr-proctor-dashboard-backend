@@ -1,49 +1,45 @@
 import supabase from "../config/supabaseClient.js";
 
 export const getLiveExams = async (req, res) => {
-  try {
-    const { data: exams, error } = await supabase
-      .from("exams")
-      .select("id,title")
-      .in("status", ["live", "scheduled"]);
-
-    if (error) {
-      console.error(error);
-      return res.status(500).json({ error: "Failed to fetch exams" });
-    }
-
-    for (const exam of exams) {
-      const { data: sessions } = await supabase
-        .from("sessions")
-        .select(
-          `
-          id,
-          status,
-          score,
-          max_score,
-          examinees (
-            full_name,
-            program,
-            year_level
-          )
-        `,
+  const { data, error } = await supabase
+    .from("exams")
+    .select(
+      `
+      id,
+      title,
+      sessions (
+        id,
+        status,
+        score,
+        max_score,
+        examinees (
+          full_name,
+          program,
+          year_level
         )
-        .eq("exam_id", exam.id);
+      )
+    `,
+    )
+    .eq("status", "live");
 
-      exam.sessions = (sessions || []).map((s) => ({
-        id: s.id,
-        status: s.status,
-        score: s.score,
-        max_score: s.max_score,
-        examinee_name: s.examinees?.full_name ?? "Examinee",
-        course: s.examinees?.program ?? "Program",
-        year_level: s.examinees?.year_level ?? "Year",
-      }));
-    }
-
-    res.json(exams);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Server error" });
+  if (error) {
+    console.error("LIVE EXAMS ERROR:", error);
+    return res.status(500).json({ error: error.message });
   }
+
+  const normalized = (data || []).map((exam) => ({
+    id: exam.id,
+    title: exam.title,
+    sessions: (exam.sessions || []).map((session) => ({
+      id: session.id,
+      status: session.status,
+      score: session.score,
+      max_score: session.max_score,
+      examinee_name: session.examinees?.full_name ?? "Examinee",
+      course: session.examinees?.program ?? "Program",
+      year_level: session.examinees?.year_level ?? "Year",
+    })),
+  }));
+
+  res.json(normalized);
 };

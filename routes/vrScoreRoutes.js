@@ -4,185 +4,135 @@ import supabase from "../config/supabaseClient.js";
 export default function vrScoreRoutes(io) {
   const router = express.Router();
 
-  /*
-==================================================
-VR → Backend: Submit Exam Score
-==================================================
-*/
-
+  /**
+   * VR → Backend: submit exam score
+   */
   router.post("/score", async (req, res) => {
     const { session_id, device_id, score, max_score, submitted_at } = req.body;
 
-    console.log("📥 VR SCORE PAYLOAD:", req.body);
-
-    if (!session_id) {
-      return res.status(400).json({ error: "session_id is required" });
-    }
-
-    if (score == null || max_score == null) {
-      return res
-        .status(400)
-        .json({ error: "score and max_score are required" });
+    // Basic validation (no auth yet)
+    if (!session_id || score == null || max_score == null) {
+      return res.status(400).json({
+        error: "Missing required fields",
+      });
     }
 
     try {
-      /*
-    ======================================
-    VERIFY SESSION
-    ======================================
-    */
-
-      const { data: session } = await supabase
-        .from("sessions")
-        .select("id")
-        .eq("id", session_id)
-        .single();
-
-      if (!session) {
-        return res.status(404).json({ error: "Session not found" });
-      }
-
-      /*
-    ======================================
-    SAVE SCORE
-    ======================================
-    */
-
-      await supabase
+      // ==============================
+      // UPDATE SESSION SCORE
+      // ==============================
+      const { error } = await supabase
         .from("sessions")
         .update({
           score,
           max_score,
+          status: "completed",
           ended_at: submitted_at || new Date().toISOString(),
         })
         .eq("id", session_id);
 
-      /*
-    ======================================
-    FETCH INFERENCE LOGS
-    ======================================
-    */
+      if (error) throw error;
 
-      const { data: logs } = await supabase
+      console.log("📊 VR SCORE RECEIVED:", {
+        session_id,
+        device_id,
+        score,
+        max_score,
+      });
+
+      // ==============================
+      // FINAL VERDICT COMPUTATION
+      // ==============================
+
+      // 1. Fetch inference logs
+      const { data: logs, error: logsError } = await supabase
         .from("inference_logs")
         .select("*")
         .eq("session_id", session_id);
 
-      if (!logs || logs.length === 0) {
-        console.warn("⚠ No inference logs found");
+      if (logsError) {
+        console.error("❌ Failed to fetch inference logs:", logsError);
       }
 
-      /*
-    ======================================
-    GROUP WINDOWS BY QUESTION
-    ======================================
-    */
+      // 2. Group logs by question
+      const questionMap = {};
 
-      const grouped = {};
-      let prob_sum = 0;
+      for (const log of logs || []) {
+        const q = log.question_index ?? 0;
 
-      logs.forEach((log) => {
-        const q = log.question_index;
-
-        if (!grouped[q]) {
-          grouped[q] = {
-            flagged: 0,
+        if (!questionMap[q]) {
+          questionMap[q] = {
             total: 0,
+            suspicious: 0,
           };
         }
 
-        grouped[q].total += 1;
-        prob_sum += log.prob_cheat ?? 0;
+        questionMap[q].total += 1;
 
-        if (log.pred_raw === 1 || log.cat_active === 1) {
-          grouped[q].flagged += 1;
+        if (log.prob_cheat > 0.5) {
+          questionMap[q].suspicious += 1;
         }
-      });
+      }
 
-      /*
-    ======================================
-    QUESTION VERDICTS
-    ======================================
-    */
+      // 3. Compute question verdicts
+      const questionSummary = [];
+      let suspiciousQuestions = 0;
 
-      let suspicious_questions = 0;
-      const question_summary = [];
+      for (const q in questionMap) {
+        const { suspicious } = questionMap[q];
 
-      Object.entries(grouped).forEach(([qIndex, q]) => {
-        const verdict = q.flagged >= 3 ? "suspicious" : "normal";
+        const verdict = suspicious >= 3 ? "suspicious" : "normal";
 
         if (verdict === "suspicious") {
-          suspicious_questions += 1;
+          suspiciousQuestions += 1;
         }
 
-        question_summary.push({
-          question_index: Number(qIndex),
+        questionSummary.push({
+          question: Number(q),
           verdict,
         });
-      });
+      }
 
-      /*
-    ======================================
-    SESSION VERDICT
-    ======================================
-    */
+      // 4. Session verdict
+      const final_verdict = suspiciousQuestions >= 2 ? "cheating" : "normal";
 
-      const final_verdict = suspicious_questions >= 2 ? "suspicious" : "normal";
+      // 5. Overall probability
+      const totalProb =
+        logs?.reduce((acc, l) => acc + (l.prob_cheat || 0), 0) || 0;
 
       const overall_probability =
-        logs && logs.length > 0 ? prob_sum / logs.length : 0;
+        logs?.length > 0 ? totalProb / logs.length : 0;
 
-      /*
-    ======================================
-    UPDATE SESSION FINAL DECISION
-    ======================================
-    */
-
-      await supabase
-        .from("sessions")
-        .update({
-          final_label: final_verdict,
-          final_confidence: overall_probability,
-          decision_at: new Date().toISOString(),
-        })
-        .eq("id", session_id);
-
-      /*
-    ======================================
-    SOCKET.IO: PUSH FINAL RESULT
-    ======================================
-    */
+      // ==============================
+      // EMIT FINAL RESULT (REAL-TIME)
+      // ==============================
+      console.log("📡 Emitting session_finalized to:", session_id);
 
       io.to(session_id).emit("session_finalized", {
         session_id,
-        score,
-        max_score,
         final_verdict,
         overall_probability,
-        question_summary,
+        score,
+        max_score,
+        question_summary: questionSummary,
       });
 
       console.log("🏁 SESSION FINALIZED:", {
         session_id,
         final_verdict,
         overall_probability,
-        question_summary,
       });
 
-      return res.json({
+      // ==============================
+      // RESPONSE
+      // ==============================
+      res.json({
         status: "ok",
-        score,
-        max_score,
-        final_verdict,
-        overall_probability,
-        question_summary,
+        message: "Score submitted successfully",
       });
     } catch (err) {
-      console.error("💥 VR SCORE ERROR:", err);
-
-      return res.status(500).json({
-        error: "Failed to finalize session",
-      });
+      console.error("VR SCORE ERROR:", err);
+      res.status(500).json({ error: "Failed to save score" });
     }
   });
 
