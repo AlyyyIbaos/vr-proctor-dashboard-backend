@@ -84,6 +84,7 @@ export default function telemetryRoutes(io) {
             decision_mode,
             model_latency_ms,
             total_latency_ms,
+            source: "ai",
           },
         ]);
 
@@ -110,10 +111,17 @@ export default function telemetryRoutes(io) {
         pred_raw,
         cat_active,
         decision_mode,
+        question_index,
         timestamp: new Date().toISOString(),
       };
 
-      io.emit("live_status", payload);
+      console.log("📡 LIVE STATUS EMIT:", {
+        session_id,
+        question_index,
+        prob_cheat,
+      });
+
+      io.to(session_id).emit("live_status", payload);
       io.to(session_id).emit("new_alert", {
         session_id,
         event_type: "behavioral", // ✅ FIXED
