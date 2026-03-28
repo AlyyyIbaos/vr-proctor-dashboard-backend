@@ -27,9 +27,9 @@ router.post("/manual-flag", async (req, res) => {
   try {
     const { session_id, question_index, severity } = req.body;
 
-    if (!session_id || !severity) {
+    if (!session_id || !severity || question_index == null) {
       return res.status(400).json({
-        error: "Invalid payload",
+        error: "Invalid payload (missing question_index)",
       });
     }
 

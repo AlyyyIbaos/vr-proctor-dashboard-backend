@@ -74,11 +74,10 @@ export default function vrScoreRoutes(io) {
         // 🔥 MANUAL OVERRIDE LOGIC
         // =========================
         if (log.source === "manual") {
-          if (log.severity === "high") {
-            // HARD OVERRIDE
+          if (log.prob_cheat >= 0.9) {
             forceCheating = true;
             questionMap[q].suspicious += 3;
-          } else if (log.severity === "medium") {
+          } else {
             questionMap[q].suspicious += 2;
           }
         }
