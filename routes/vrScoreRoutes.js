@@ -110,13 +110,25 @@ export default function vrScoreRoutes(io) {
       // 4. Session verdict
       const final_verdict = suspiciousQuestions >= 2 ? "cheating" : "normal";
 
-      // 5. Overall probability
+      // 5. Overall probability (HYBRID)
+      // avgProb = average AI confidence across all windows
       const totalProb =
         logs?.reduce((acc, l) => acc + (l.prob_cheat || 0), 0) || 0;
 
-      const overall_probability =
-        logs?.length > 0 ? totalProb / logs.length : 0;
+      const avgProb = logs?.length > 0 ? totalProb / logs.length : 0;
 
+      // suspiciousRatio = proportion of suspicious questions
+      const totalQuestions = Object.keys(questionMap).length || 0;
+      const suspiciousRatio =
+        totalQuestions > 0 ? suspiciousQuestions / totalQuestions : 0;
+
+      // HYBRID SCORE
+      // 50% from raw AI probabilities
+      // 50% from suspicious-question dominance
+      const overall_probability = Math.max(
+        0,
+        Math.min(1, 0.5 * avgProb + 0.5 * suspiciousRatio),
+      );
       // ==============================
       // EMIT FINAL RESULT (REAL-TIME)
       // ==============================
