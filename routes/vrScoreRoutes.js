@@ -56,8 +56,6 @@ export default function vrScoreRoutes(io) {
       // 2. Group logs by question
       const questionMap = {};
 
-      let forceCheating = false;
-
       for (const log of logs || []) {
         const q = log.question_index ?? 0;
 
@@ -65,27 +63,20 @@ export default function vrScoreRoutes(io) {
           questionMap[q] = {
             total: 0,
             suspicious: 0,
+            hasManualTrigger: false,
           };
         }
 
         questionMap[q].total += 1;
 
-        // =========================
-        // 🔥 MANUAL OVERRIDE LOGIC
-        // =========================
+        // Manual trigger should dominate this question
         if (log.source === "manual") {
-          if (log.prob_cheat >= 0.9) {
-            forceCheating = true;
-            questionMap[q].suspicious += 3;
-          } else {
-            questionMap[q].suspicious += 2;
-          }
+          questionMap[q].hasManualTrigger = true;
+          continue;
         }
 
-        // =========================
-        // AI LOGIC
-        // =========================
-        else if (log.prob_cheat > 0.5) {
+        // AI-only suspicious counting
+        if (log.prob_cheat > 0.5) {
           questionMap[q].suspicious += 1;
         }
       }
@@ -95,11 +86,16 @@ export default function vrScoreRoutes(io) {
       let suspiciousQuestions = 0;
 
       for (const q in questionMap) {
-        const { suspicious, total } = questionMap[q];
+        const { suspicious, total, hasManualTrigger } = questionMap[q];
 
         const ratio = total > 0 ? suspicious / total : 0;
 
-        const verdict = ratio >= 0.4 ? "suspicious" : "normal";
+        // Manual trigger wins for that question
+        const verdict = hasManualTrigger
+          ? "suspicious"
+          : ratio >= 0.4
+            ? "suspicious"
+            : "normal";
 
         if (verdict === "suspicious") {
           suspiciousQuestions += 1;
@@ -108,19 +104,11 @@ export default function vrScoreRoutes(io) {
         questionSummary.push({
           question: Number(q),
           verdict,
-          suspicious_count: suspicious, // 🔥 optional (for explainability)
-          total_windows: total,
-          ratio: Number(ratio.toFixed(2)),
-          override: forceCheating,
         });
       }
 
       // 4. Session verdict
-      const final_verdict = forceCheating
-        ? "cheating"
-        : suspiciousQuestions >= 2
-          ? "cheating"
-          : "normal";
+      const final_verdict = suspiciousQuestions >= 2 ? "cheating" : "normal";
 
       // 5. Overall probability
       const totalProb =
