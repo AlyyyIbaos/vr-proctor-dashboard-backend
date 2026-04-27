@@ -16,6 +16,7 @@ import testInferenceRoute from "./routes/testInference.js";
 import telemetryRoutes from "./routes/telemetryRoutes.js";
 import aggregationRoutes from "./routes/aggregationRoutes.js";
 import vrSessionRoutes from "./routes/vrSessionRoutes.js";
+import vrVoiceRoutes from "./routes/vrVoiceRoutes.js";
 
 import startInferenceKeepAlive from "./keepAlive.js";
 
@@ -74,6 +75,7 @@ app.use("/api/vr", vrTestRoutes);
 app.use("/api/vr", vrSessionRoutes);
 app.use("/api/vr", telemetryRoutes(io));
 app.use("/api/vr", vrScoreRoutes(io));
+app.use("/api/vr", vrVoiceRoutes);
 
 app.use("/api", testInferenceRoute);
 
