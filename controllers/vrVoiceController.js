@@ -1,6 +1,6 @@
 import fetch from "node-fetch";
 
-const PYTHON_URL = process.env.PYTHON_URL || "http://localhost:8000";
+const PYTHON_URL = process.env.INFERENCE_SERVICE_URL || "http://localhost:8000";
 
 export const receiveVoiceVAD = async (req, res) => {
   try {
